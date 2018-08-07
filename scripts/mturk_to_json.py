@@ -30,6 +30,9 @@ def main(args):
                 else df['Answer.img_' + ns + 'a_name'][idx]
             ob2 = df['Input.img_' + ns + 'b_name'][idx] if 'Input.img_' + ns + 'b_name' in df \
                 else df['Answer.img_' + ns + 'b_name'][idx]
+
+            ob1 = ob1.strip().replace("\t","")
+            ob2 = ob2.strip().replace("\t","")
             ans = df['Answer.annotation' + ns + '-mental'][idx]
             nans = -1 if ans == 0 else (1 if ans == 1 else 0)
             if ob1 not in objs:
