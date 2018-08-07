@@ -1,6 +1,16 @@
 #!/usr/bin/env python3
 __author__ = 'thomason-jesse'
 # Takes in the raw dataset json and produces labels, then a class-balanced train/dev/test split written out as json.
+# labeled fold json format:
+# {"names": [obj1, obj2, ...],
+# {"folds":
+#   {fold:
+#     {prep:
+#       {"pair":  [obji+objj, ...]}
+#       {"label": [lij, ...]}
+#     }
+#   }
+# }
 
 import argparse
 import numpy as np
@@ -13,7 +23,8 @@ def main(args):
     # Read in raw dataset.
     print("Loading raw data from '" + args.infile + "'...")
     with open(args.infile, 'r') as f:
-        prep_d = json.load(f)
+        all_d = json.load(f)
+        prep_d = all_d["votes"]
         prep = prep_d.keys()
     print("... done")
 
@@ -89,7 +100,7 @@ def main(args):
     # Do train/dev/test split that tries to match each fold's label distribution with global.
     print("Performing train/dev/test split while preserving class distribution...")
     folds = [('train', 0.8), ('dev', 0.1), ('test', 0.1)]
-    lf = {fold: {p: [] for p in prep} for fold, _ in folds}
+    lf = {fold: {p: {"pair": [], "label": []} for p in prep} for fold, _ in folds}
     cc = {fold: {p: [0] * len(cr) for p in prep} for fold, _ in folds}
     for p in lbs:
         rkeys = list(lbs[p].keys())[:]
@@ -100,7 +111,8 @@ def main(args):
                     if cc[fold][p][lbs[p][k]] / float(prop * len(rkeys)) \
                             < target_dist[p][lbs[p][k]]:  # this class needs more
                         cc[fold][p][lbs[p][k]] += 1
-                        lf[fold][p].append(k)
+                        lf[fold][p]["pair"].append(k)
+                        lf[fold][p]["label"].append(lbs[p][k])
     print("... done")
 
     # Show class breakdown per fold.
@@ -116,7 +128,7 @@ def main(args):
     # Write outfile.
     print("Writing labeled folds to '" + args.outfile + "'...")
     with open(args.outfile, 'w') as f:
-        json.dump(lf, f)
+        json.dump({"names": all_d["names"], "folds": lf}, f)
     print("... done")
 
 

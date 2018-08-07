@@ -1,6 +1,13 @@
 #!/usr/bin/env python3
 __author__ = 'thomason-jesse'
 # Takes in the output CSV and log dir from the MTurk run and stores processed dataset as json.
+# dataset json format:
+# {"names": [obj1, obj2, ...],
+#   {prep:
+#     {obj1+obj2: [v1, v2, ...]
+#      ...}
+#   }
+# }
 
 import argparse
 import numpy as np
@@ -62,7 +69,7 @@ def main(args):
     # Output to JSON.
     print("Writing to outfile to '" + args.outfile + "'...")
     with open(args.outfile, 'w') as f:
-        json.dump({"in": obj_in, "on": obj_on}, f)
+        json.dump({"names": objs, "votes": {"in": obj_in, "on": obj_on}}, f)
     print("... done")
 
 
