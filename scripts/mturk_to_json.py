@@ -29,13 +29,14 @@ def main(args):
                 objs.append(ob1)
             if ob2 not in objs:
                 objs.append(ob2)
-            k = (ob1, ob2)
-            if k not in obj_in:
-                obj_in[k] = []
-                obj_on[k] = []
+            k = '+'.join([ob1, ob2])
             if aidx < 10:
+                if k not in obj_in:
+                    obj_in[k] = []
                 obj_in[k].append(nans)
             else:
+                if k not in obj_on:
+                    obj_on[k] = []
                 obj_on[k].append(nans)
     print("... done")
 
@@ -47,6 +48,22 @@ def main(args):
         print("\tNum votes totals:\t" + str(total_by_num_votes))
         print("\tNum votes percent:\t" + str(["%0.2f" % (n / float(sum(total_by_num_votes)))
                                               for n in total_by_num_votes]))
+        sum_votes = [sum(d[k]) for k in d]
+        total_by_sum_votes = [sum_votes.count(i) for i in range(-4, 5)]
+        print("\tSum votes percent:\t" + str([str(i) + ": %0.2f" % (n / float(len(sum_votes)))
+                                              for i, n in zip(range(-4, 5), total_by_sum_votes)]))
+        num_concensus = len([1 for k in d if min(d[k]) == max(d[k])])
+        num_offset = len([1 for k in d if min(d[k]) != max(d[k]) and sum(d[k]) != 0])
+        num_even = len([1 for k in d if sum(d[k]) == 0])
+        print("\tConsensus vote:\t" + str(num_concensus) + " (%0.2f" % (num_concensus / float(len(d))) + ")")
+        print("\tOffset vote:\t" + str(num_offset) + " (%0.2f" % (num_offset / float(len(d))) + ")")
+        print("\tEven vote:\t" + str(num_even) + " (%0.2f" % (num_even / float(len(d))) + ")")
+
+    # Output to JSON.
+    print("Writing to outfile to '" + args.outfile + "'...")
+    with open(args.outfile, 'w') as f:
+        json.dump({"in": obj_in, "on": obj_on}, f)
+    print("... done")
 
 
 if __name__ == "__main__":
