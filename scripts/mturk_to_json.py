@@ -4,8 +4,12 @@ __author__ = 'thomason-jesse'
 # dataset json format:
 # {"names": [obj1, obj2, ...],
 #   {prep:
-#     {obj1+obj2: [v1, v2, ...]
-#      ...}
+#     {obj1:
+#       {obj2: [v1, v2, ...]
+#        ...
+#       }
+#      ...
+#     }
 #   }
 # }
 
@@ -30,44 +34,57 @@ def main(args):
                 else df['Answer.img_' + ns + 'a_name'][idx]
             ob2 = df['Input.img_' + ns + 'b_name'][idx] if 'Input.img_' + ns + 'b_name' in df \
                 else df['Answer.img_' + ns + 'b_name'][idx]
-
-            ob1 = ob1.strip().replace("\t","")
-            ob2 = ob2.strip().replace("\t","")
+            ob1 = ob1.strip().replace("\t", "")
+            ob2 = ob2.strip().replace("\t", "")
             ans = df['Answer.annotation' + ns + '-mental'][idx]
-            nans = -1 if ans == 0 else (1 if ans == 1 else 0)
+
+            # Ignore "yes, but" votes (2)
+            # nans = -1 if ans == 0 else (1 if ans == 1 else 0)
+            # Round "yes, but" votes (2) down to "no"
+            nans = 1 if ans == 1 else -1
+
             if ob1 not in objs:
                 objs.append(ob1)
             if ob2 not in objs:
                 objs.append(ob2)
-            k = '+'.join([ob1, ob2])
+            oidx = objs.index(ob1)
+            ojdx = objs.index(ob2)
+
             if aidx < 10:
-                if k not in obj_in:
-                    obj_in[k] = []
-                obj_in[k].append(nans)
+                if oidx not in obj_in:
+                    obj_in[oidx] = {}
+                if ojdx not in obj_in[oidx]:
+                    obj_in[oidx][ojdx] = []
+                obj_in[oidx][ojdx].append(nans)
             else:
-                if k not in obj_on:
-                    obj_on[k] = []
-                obj_on[k].append(nans)
+                if oidx not in obj_on:
+                    obj_on[oidx] = {}
+                if ojdx not in obj_on[oidx]:
+                    obj_on[oidx][ojdx] = []
+                obj_on[oidx][ojdx].append(nans)
     print("... done")
 
     # Some basic stats.
     for prop, d in [["in", obj_in], ["on", obj_on]]:
         print(prop + " stats:")
-        num_votes = [len(d[k]) for k in d]
+        num_votes = [len(d[oidx][ojdx]) for oidx in d for ojdx in d[oidx]]
         total_by_num_votes = [num_votes.count(i) for i in range(1, 5)]
         print("\tNum votes totals:\t" + str(total_by_num_votes))
         print("\tNum votes percent:\t" + str(["%0.2f" % (n / float(sum(total_by_num_votes)))
                                               for n in total_by_num_votes]))
-        sum_votes = [sum(d[k]) for k in d]
+        sum_votes = [sum(d[oidx][ojdx]) for oidx in d for ojdx in d[oidx]]
         total_by_sum_votes = [sum_votes.count(i) for i in range(-4, 5)]
         print("\tSum votes percent:\t" + str([str(i) + ": %0.2f" % (n / float(len(sum_votes)))
                                               for i, n in zip(range(-4, 5), total_by_sum_votes)]))
-        num_concensus = len([1 for k in d if min(d[k]) == max(d[k])])
-        num_offset = len([1 for k in d if min(d[k]) != max(d[k]) and sum(d[k]) != 0])
-        num_even = len([1 for k in d if sum(d[k]) == 0])
-        print("\tConsensus vote:\t" + str(num_concensus) + " (%0.2f" % (num_concensus / float(len(d))) + ")")
-        print("\tOffset vote:\t" + str(num_offset) + " (%0.2f" % (num_offset / float(len(d))) + ")")
-        print("\tEven vote:\t" + str(num_even) + " (%0.2f" % (num_even / float(len(d))) + ")")
+        num_concensus = len([1 for oidx in d for ojdx in d[oidx]
+                             if min(d[oidx][ojdx]) == max(d[oidx][ojdx])])
+        num_offset = len([1 for oidx in d for ojdx in d[oidx]
+                          if min(d[oidx][ojdx]) != max(d[oidx][ojdx]) and sum(d[oidx][ojdx]) != 0])
+        num_even = len([1 for oidx in d for ojdx in d[oidx]
+                        if sum(d[oidx][ojdx]) == 0])
+        print("\tConsensus vote:\t" + str(num_concensus) + " (%0.2f" % (num_concensus / float(len(num_votes))) + ")")
+        print("\tOffset vote:\t" + str(num_offset) + " (%0.2f" % (num_offset / float(len(num_votes))) + ")")
+        print("\tEven vote:\t" + str(num_even) + " (%0.2f" % (num_even / float(len(num_votes))) + ")")
 
     # Output to JSON.
     print("Writing to outfile to '" + args.outfile + "'...")

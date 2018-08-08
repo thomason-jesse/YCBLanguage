@@ -93,7 +93,7 @@ def main(args):
     bs.append("Majority Class")
     rs.append({})
     for p in preps:
-        rs[0][p] = run_majority_class(train[p]['label'], test[p]['label'])
+        rs[0][p] = run_majority_class(train[p]["label"], test[p]["label"])
     print("... done")
 
     # Majority class | object ids baseline.
@@ -102,11 +102,11 @@ def main(args):
     rs.append({})
     fs = [range(len(names)), range(len(names))]  # Two one-hot vectors of which object name was seen.
     for p in preps:
-        tr_f = [[names.index(n) for n in lf['train'][p]['pair'][idx].split('+')] for idx in
-                range(len(lf['train'][p]['pair']))]
-        te_f = [[names.index(n) for n in lf['test'][p]['pair'][idx].split('+')] for idx in
-                range(len(lf['test'][p]['pair']))]
-        rs[1][p] = run_cat_naive_bayes(fs, tr_f, train[p]['label'], te_f, test[p]['label'])
+        tr_f = [[train[p][s][idx] for s in ["ob1", "ob2"]] for idx in
+                range(len(train[p]["ob1"]))]
+        te_f = [[test[p][s][idx] for s in ["ob1", "ob2"]] for idx in
+                range(len(test[p]["ob1"]))]
+        rs[1][p] = run_cat_naive_bayes(fs, tr_f, train[p]["label"], te_f, test[p]["label"])
     print("... done")
 
     # Show results.
