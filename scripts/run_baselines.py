@@ -115,7 +115,7 @@ def main(args):
         print(" " + bs[idx] + ":")
         for p in preps:
             print("  " + p + ":\t%0.3f" % rs[idx][p][0])
-            print('\t(CM\t' + '\n\t\t'.join(['\t'.join([str(ct) for ct in rs[idx][p][1][i]])
+            print('\t(CM\t' + '\n\t\t'.join(['\t'.join([str(int(ct)) for ct in rs[idx][p][1][i]])
                                              for i in range(len(rs[idx][p][1]))]) + ")")
 
 
