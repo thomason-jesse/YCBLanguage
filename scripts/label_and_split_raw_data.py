@@ -20,6 +20,7 @@ import json
 
 def main(args):
     assert args.label_technique in ['majority', '3class', 'full']
+    assert args.split_technique in ['object', 'pair']
 
     # Read in raw dataset.
     print("Loading raw data from '" + args.infile + "'...")
@@ -92,7 +93,7 @@ def main(args):
     print("... done")
 
     # Show class breakdown for whole dataset.
-    all_d_pairs = {p: [(oidx, ojdx) for oidx in prep_d[p] for ojdx in prep_d[p][oidx]] for p in prep}
+    all_d_pairs = {p: [(int(oidx), int(ojdx)) for oidx in prep_d[p] for ojdx in prep_d[p][oidx]] for p in prep}
     target_dist = {}
     for p in prep_d:
         d = prep_d[p]
@@ -113,52 +114,86 @@ def main(args):
         target_dist[p] = [s[c] / float(len(all_d_pairs[p]) - skipped) for c in cr]
 
     # Do train/dev/test split that tries to match each fold's label distribution with global.
-    print("Performing train/dev/test split while preserving class distribution...")
+    print("Performing train/dev/test split '" + args.split_technique + "' while preserving class distribution...")
     folds = [('train', 0.8), ('dev', 0.1), ('test', 0.1)]
     lf = {fold: {p: {"ob1": [], "ob2": [], "label": []} for p in prep} for fold, _ in folds}
     cc = {fold: {p: [0] * len(cr) for p in prep} for fold, _ in folds}
     all_pairs = {p: [(oidx, ojdx) for oidx in lbs[p] for ojdx in lbs[p][oidx]] for p in prep}
     pairs_kept = {p: [] for p in prep}
 
-    # Each object is assigned to one fold, and its resulting pairs are committed to that fold only if
-    # the paired objects are both in the same fold. This results in a block diagonal matrix of usable pairs
-    # in the final dataset, with blocks of "train" pairs, "test" pairs, and "dev" pairs, since pairs of objects
-    # that are labeled but appear in different folds are excluded.
-    rnames = names[:]
-    np.random.shuffle(rnames)
-    fns = {fold: set() for fold, _ in folds}
-    for n in rnames:
-        f_avg_rel_dist = [np.average([abs(prop - sum(cc[fold][p]) / float(len(all_pairs[p]))) / prop
-                                      for p in prep]) for fold, prop in folds]
-        fidx = f_avg_rel_dist.index(max(f_avg_rel_dist))  # next fold to populate
-        fold = folds[fidx][0]
-        prop = folds[fidx][1]
-        nidx = names.index(n)
-        for p in lbs:
-            for oidx in lbs[p]:
-                if oidx == nidx or oidx in fns[fold]:
-                    for ojdx in lbs[p][oidx]:
-                        if nidx == ojdx or ojdx in fns[fold]:
-                            if oidx == nidx or ojdx == nidx:
-                                if cc[fold][p][lbs[p][oidx][ojdx]] / float(prop * len(all_pairs[p])) \
-                                        < target_dist[p][lbs[p][oidx][ojdx]]:
-                                    cc[fold][p][lbs[p][oidx][ojdx]] += 1
-                                    lf[fold][p]["ob1"].append(oidx)
-                                    lf[fold][p]["ob2"].append(ojdx)
-                                    lf[fold][p]["label"].append(lbs[p][oidx][ojdx])
-                                    pairs_kept[p].append((oidx, ojdx))
-                                    fns[fold].add(nidx)  # include this object in the fold since we decided we needed at least one of its pairs
+    if args.split_technique == 'object':
+        # Each object is assigned to one fold, and its resulting pairs are committed to that fold only if
+        # the paired objects are both in the same fold. This results in a block diagonal matrix of usable pairs
+        # in the final dataset, with blocks of "train" pairs, "test" pairs, and "dev" pairs, since pairs of objects
+        # that are labeled but appear in different folds are excluded.
+        rnames = names[:]
+        np.random.shuffle(rnames)
+        fns = {fold: set() for fold, _ in folds}
+        for n in rnames:
+            f_avg_rel_dist = [np.average([abs(prop - sum(cc[fold][p]) / float(len(all_pairs[p]))) / prop
+                                          for p in prep]) for fold, prop in folds]
+            fidx = f_avg_rel_dist.index(max(f_avg_rel_dist))  # next fold to populate
+            fold = folds[fidx][0]
+            prop = folds[fidx][1]
+            nidx = names.index(n)
+            for p in lbs:
+                for oidx in lbs[p]:
+                    if oidx == nidx or oidx in fns[fold]:
+                        for ojdx in lbs[p][oidx]:
+                            if nidx == ojdx or ojdx in fns[fold]:
+                                if oidx == nidx or ojdx == nidx:
+                                    if cc[fold][p][lbs[p][oidx][ojdx]] / float(prop * len(all_pairs[p])) \
+                                            < target_dist[p][lbs[p][oidx][ojdx]]:
+                                        cc[fold][p][lbs[p][oidx][ojdx]] += 1
+                                        lf[fold][p]["ob1"].append(oidx)
+                                        lf[fold][p]["ob2"].append(ojdx)
+                                        lf[fold][p]["label"].append(lbs[p][oidx][ojdx])
+                                        pairs_kept[p].append((oidx, ojdx))
+                                        fns[fold].add(nidx)  # include this object in the fold since we decided we needed at least one of its pairs
 
-    # Assert that no object appears across folds even in different tasks.
-    for fold, _ in folds:
-        for p in lbs:
-            for of, _ in folds:
-                if of != fold:
-                    for op in prep:
-                        for oidx in lf[fold][p]["ob1"]:
-                            assert oidx not in lf[of][op]["ob1"] and oidx not in lf[of][op]["ob2"]
-                        for oidx in lf[fold][p]["ob2"]:
-                            assert oidx not in lf[of][op]["ob1"] and oidx not in lf[of][op]["ob2"]
+        # Assert that no object appears across folds even in different tasks.
+        for fold, _ in folds:
+            for p in lbs:
+                for of, _ in folds:
+                    if of != fold:
+                        for op in prep:
+                            for oidx in lf[fold][p]["ob1"]:
+                                assert oidx not in lf[of][op]["ob1"] and oidx not in lf[of][op]["ob2"]
+                            for oidx in lf[fold][p]["ob2"]:
+                                assert oidx not in lf[of][op]["ob1"] and oidx not in lf[of][op]["ob2"]
+    else:
+        # Each pair is assigned to a particular fold, and pairs in that fold are shared between tasks (e.g., (a,b) in "in" train implies
+        # (a, b) will not be in the "on" train set).
+        all_possible_pairs = set()
+        for p in all_d_pairs:
+            all_possible_pairs.update(all_d_pairs[p])
+        all_possible_pairs = list(all_possible_pairs)
+        np.random.shuffle(all_possible_pairs)
+        for oidx, ojdx in all_possible_pairs:
+            f_avg_rel_dist = [np.average([abs(prop - sum(cc[fold][p]) / float(len(all_pairs[p]))) / prop
+                                          for p in prep]) for fold, prop in folds]
+            fidx = f_avg_rel_dist.index(max(f_avg_rel_dist))  # next fold to populate
+            fold = folds[fidx][0]
+            prop = folds[fidx][1]
+            for p in lbs:
+                if (oidx in lbs[p] and ojdx in lbs[p][oidx] and
+                    cc[fold][p][lbs[p][oidx][ojdx]] / float(prop * len(all_pairs[p])) \
+                     < target_dist[p][lbs[p][oidx][ojdx]]):
+                    cc[fold][p][lbs[p][oidx][ojdx]] += 1
+                    lf[fold][p]["ob1"].append(oidx)
+                    lf[fold][p]["ob2"].append(ojdx)
+                    lf[fold][p]["label"].append(lbs[p][oidx][ojdx])
+                    pairs_kept[p].append((oidx, ojdx))
+
+        # Assert that no object appears across folds even in different tasks.
+        for fold, _ in folds:
+            for p in lbs:
+                for of, _ in folds:
+                    if of != fold:
+                        ts = [(lf[fold][p]["ob1"][idx], lf[fold][p]["ob2"][idx]) for idx in range(len(lf[fold][p]["ob1"]))]
+                        for op in prep:
+                            for idx in range(len(lf[of][op]["ob1"])):
+                                assert (lf[of][op]["ob1"][idx], lf[of][op]["ob2"]) not in ts 
     print("... done")
 
     # Show included/excluded stats.
@@ -191,6 +226,8 @@ if __name__ == "__main__":
                         help="input dataset json file")
     parser.add_argument('--label_technique', type=str, required=True,
                         help="either 'majority', '3class', or 'full'")
+    parser.add_argument('--split_technique', type=str, required=True,
+                        help="either 'object' or 'pair")
     parser.add_argument('--outfile', type=str, required=True,
                         help="the file to write the json labeled folds to")
     main(parser.parse_args())
