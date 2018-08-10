@@ -3,6 +3,9 @@ __author__ = 'thomason-jesse'
 # Takes in the output CSV and log dir from the MTurk run and stores processed dataset as json.
 # dataset json format:
 # {"names": [obj1, obj2, ...],
+#  "res": [[re11, re12, ...], [re21, re22, ...] ...]
+#  "imgs": [img_fp1, img_fp2, ...]
+#  "votes":
 #   {prep:
 #     {obj1:
 #       {obj2: [v1, v2, ...]
@@ -10,6 +13,7 @@ __author__ = 'thomason-jesse'
 #       }
 #      ...
 #     }
+#    ...
 #   }
 # }
 
@@ -86,10 +90,20 @@ def main(args):
         print("\tOffset vote:\t" + str(num_offset) + " (%0.2f" % (num_offset / float(len(num_votes))) + ")")
         print("\tEven vote:\t" + str(num_even) + " (%0.2f" % (num_even / float(len(num_votes))) + ")")
 
+    # Read in language and vision JSON.
+    print("Reading in language and vision data from '" + args.in_lang_vis + "'...")
+    with open(args.in_lang_vis, 'r') as f:
+        lvd = json.load(f)
+    print("... done")
+
     # Output to JSON.
     print("Writing to outfile to '" + args.outfile + "'...")
     with open(args.outfile, 'w') as f:
-        json.dump({"names": objs, "votes": {"in": obj_in, "on": obj_on}}, f)
+        json.dump({"names": objs,
+                   "res": [lvd["res"][lvd["names"].index(n)] for n in objs],
+                   "imgs": [lvd["imgs"][lvd["names"].index(n)] for n in objs],
+                   "votes": {"in": obj_in, "on": obj_on}},
+                  f, indent=2)
     print("... done")
 
 
@@ -98,6 +112,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--infile', type=str, required=True,
                         help="input csv file")
+    parser.add_argument('--in_lang_vis', type=str, required=True,
+                        help="input json with language and vision data")
     parser.add_argument('--outfile', type=str, required=True,
                         help="the file to write the json dataset to")
     main(parser.parse_args())

@@ -1,14 +1,26 @@
 #!/usr/bin/env python3
 __author__ = 'thomason-jesse'
-# Takes in the output CSV from a blocks MTurk run and creates an HTML visualization and summary.
+# Takes in the output CSV from a YCB RE MTurk run and creates a json output and optional HTML visualization and summary.
+# json format:
+# {"names": [str1, str2, ...],
+#  "res": [[re11, re12, ...], [re21, re22, ...] ...]
+#  "imgs": [img_fp1, img_fp2, ...]
+# }
 
 import argparse
 import pandas as pd
 import json
+import os
 import string
 
 
 def main(args):
+    assert os.path.isdir(args.outdir)
+    img_dir = os.path.join(args.outdir, "imgs")
+    outfile = os.path.join(args.outdir, "lang_vis.json")
+    if not os.path.isdir(img_dir):
+        cmd = "mkdir " + img_dir
+        os.system(cmd)
 
     # Read in CSV from MTurk and validate users.
     print("Reading data in from '" + args.infile + "'...")
@@ -90,30 +102,51 @@ def main(args):
     print("Ten most frequent words:\t" + str(topw[:10]))
     print("Ten least frequent words:\t" + str(topw[-10:]))
 
-    # Write to outfile.
-    print("Writing output to '" + args.outfile + "'...")
-    with open(args.outfile, 'w') as f:
-        f.write("<p>Num valid, annotated items: " + str(len(descs)) + "<br/>")
-        f.write("Avg REs per item: " + str(ad) + "<br/>")
-        f.write("Avg tokens per RE: " + str(adl) + "<br/>")
-        f.write("Avg unique tokens per RE: " + str(aut) + "<br/>")
-        f.write("Num unique words: " + str(len(wc)) + "<br/>")
-        f.write("Ten most frequent words: " + str(topw[:10]) + "<br/>")
-        f.write("Ten least frequent words: " + str(topw[-10:]) + "</p>")
-
-        f.write("<table border='1'><tr><th>Name</th><th>Pic</th><th>REs</th></tr>")
-        for n in descs:
-            f.write("<tr><td>" + n + "</td>")
-            f.write("<td><img src=\"" + imgs[n] + "\" width=\"400px\"></td>")
-            f.write("<td>" + "<br/><br/>".join([' '.join(d) for d in descs[n]]) + "</td>")
-            f.write("</tr>\n")
-        f.write("</table>")
-
-        f.write("<table><tr><th>Word</th><th>Frequency</th></tr>")
-        for w, k in topw:
-            f.write("<tr><td>" + w + "</td><td>" + str(k) + "</td></tr>\n")
-        f.write("</table>")
+    # Get images.
+    print("Downloading images to local directory '" + img_dir + "'...")
+    limgs = {}
+    for n in descs:
+        lfp = os.path.join(img_dir, n + ".jpeg")
+        if not os.path.isfile(lfp):
+            cmd = "curl -o " + lfp + " " + imgs[n]
+            os.system(cmd)
+        limgs[n] = lfp
     print("... done")
+
+    # Write to outfile.
+    print("Writing out to '" + outfile + "'...")
+    with open(outfile, 'w') as f:
+        json.dump({"names": list(descs.keys()),
+                   "res": [[re for re in descs[k]] for k in descs.keys()],
+                   "imgs": [limgs[k] for k in descs.keys()]},
+                  f, indent=2)
+    print("... done")
+
+    # Write to HTML outfile.
+    if args.html_outfile is not None:
+        print("Writing output to '" + args.html_outfile + "'...")
+        with open(args.html_outfile, 'w') as f:
+            f.write("<p>Num valid, annotated items: " + str(len(descs)) + "<br/>")
+            f.write("Avg REs per item: " + str(ad) + "<br/>")
+            f.write("Avg tokens per RE: " + str(adl) + "<br/>")
+            f.write("Avg unique tokens per RE: " + str(aut) + "<br/>")
+            f.write("Num unique words: " + str(len(wc)) + "<br/>")
+            f.write("Ten most frequent words: " + str(topw[:10]) + "<br/>")
+            f.write("Ten least frequent words: " + str(topw[-10:]) + "</p>")
+
+            f.write("<table border='1'><tr><th>Name</th><th>Pic</th><th>REs</th></tr>")
+            for n in descs:
+                f.write("<tr><td>" + n + "</td>")
+                f.write("<td><img src=\"" + imgs[n] + "\" width=\"400px\"></td>")
+                f.write("<td>" + "<br/><br/>".join([' '.join(d) for d in descs[n]]) + "</td>")
+                f.write("</tr>\n")
+            f.write("</table>")
+
+            f.write("<table><tr><th>Word</th><th>Frequency</th></tr>")
+            for w, k in topw:
+                f.write("<tr><td>" + w + "</td><td>" + str(k) + "</td></tr>\n")
+            f.write("</table>")
+        print("... done")
 
 
 if __name__ == "__main__":
@@ -121,6 +154,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--infile', type=str, required=True,
                         help="input csv file")
-    parser.add_argument('--outfile', type=str, required=True,
+    parser.add_argument('--outdir', type=str, required=True,
+                        help="output directory for json file and images directory")
+    parser.add_argument('--html_outfile', type=str, required=False,
                         help="output html file for visualization")
     main(parser.parse_args())
