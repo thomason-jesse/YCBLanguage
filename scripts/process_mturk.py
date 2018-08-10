@@ -29,8 +29,8 @@ def main(args):
 
                 # Custom cleans.
                 tostrike = [" over there", "give me ", "could you ", "can you ", "that s sitting there",
-                            "i would like ", " on the middle of the glass", " on top of the glass",
-                            " sitting", " there"]
+                            "i would like ", " in the middle of the glass", " on the middle of the glass",
+                            " on top of the glass", " on the glass", " on the table", " sitting", " there"]
                 for tos in tostrike:
                     if tos in d:
                         dr = d.replace(tos, "")
