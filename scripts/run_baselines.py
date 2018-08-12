@@ -48,7 +48,7 @@ def run_majority_class(tr_l, te_l):
 # te_f - testing features
 # te_l - testing labels
 def run_cat_naive_bayes(fs, tr_f, tr_l, te_f, te_l,
-                        verbose=False):
+                        verbose=False, smooth=0):
 
     # Train: calculate the prior per class and the conditional likelihood of each feature given the class.
     if verbose:
@@ -59,8 +59,8 @@ def run_cat_naive_bayes(fs, tr_f, tr_l, te_f, te_l,
         c = tr_l[idx]
         x = tr_f[idx]
         if c not in cf:
-            cf[c] = 0
-            ff_c[c] = [{cat: 0 for cat in fs[jdx]} for jdx in range(len(x))]
+            cf[c] = smooth
+            ff_c[c] = [{cat: smooth for cat in fs[jdx]} for jdx in range(len(x))]
         cf[c] += 1
         for jdx in range(len(x)):
             ff_c[c][jdx][x[jdx]] += 1
@@ -77,7 +77,7 @@ def run_cat_naive_bayes(fs, tr_f, tr_l, te_f, te_l,
     for idx in range(len(te_f)):
         tc = te_l[idx]
         x = te_f[idx]
-        y_probs = [cp[c] * reduce(lambda _x, _y: _x * _y, [fp_c[c][jdx][x[jdx]] for jdx in range(len(x))])
+        y_probs = [np.log(cp[c]) + reduce(lambda _x, _y: _x + _y, [np.log(fp_c[c][jdx][x[jdx]]) for jdx in range(len(x))])
                    for c in cf]
         cm[tc][y_probs.index(max(y_probs))] += 1
     if verbose:
@@ -143,7 +143,8 @@ def run_lang_2_label(maxlen, word_to_i,
     for idx in range(len(tr_enc_exps)):
         for ridx in range(len(tr_enc_exps[idx][0])):
             for rjdx in range(len(tr_enc_exps[idx][1])):
-                tr_inputs.append([p(tr_enc_exps[idx][0][ridx]), p(tr_enc_exps[idx][1][rjdx])])
+                tr_inputs.append([p(torch.tensor(tr_enc_exps[idx][0][ridx], dtype=torch.long)),
+                                  p(torch.tensor(tr_enc_exps[idx][1][rjdx], dtype=torch.long))])
                 tr_outputs.append(tr_l[idx])
                 if tr_l[idx] not in classes:
                     classes.append(tr_l[idx])
@@ -155,7 +156,8 @@ def run_lang_2_label(maxlen, word_to_i,
         pairs_in = []
         for ridx in range(len(te_enc_exps[idx][0])):
             for rjdx in range(len(te_enc_exps[idx][1])):
-                pairs_in.append([p(te_enc_exps[idx][0][ridx]), p(te_enc_exps[idx][1][rjdx])])
+                pairs_in.append([p(torch.tensor(te_enc_exps[idx][0][ridx], dtype=torch.long)),
+                                 p(torch.tensor(te_enc_exps[idx][1][rjdx], dtype=torch.long))])
         te_inputs.append(pairs_in)
     if verbose:
         print("L2L: ... done")
@@ -190,7 +192,7 @@ def run_lang_2_label(maxlen, word_to_i,
             idx += 1
             if idx == len(tr_inputs):
                 idx = 0
-        tloss /= len(tr_inputs)
+        tloss /= batch_size
         print("... epoch " + str(epoch) + " train loss " + str(tloss))
     if verbose:
         print("L2L: ... done")
@@ -206,7 +208,7 @@ def run_lang_2_label(maxlen, word_to_i,
                 _, logits = m(te_inputs[jdx][vidx])
                 slogits += logits
             pc = slogits.max(1)[1]
-            cm[tr_l[jdx]][pc] += 1
+            cm[te_l[jdx]][pc] += 1
         acc = get_acc(cm)
     if verbose:
         print("L2L: ... done; " + str(acc))
@@ -234,16 +236,16 @@ def make_lang_structures(tr_f, te_f):
                     re_is.append(word_to_i[w])
                 re_is.append(word_to_i["<e>"])
                 maxlen = max(maxlen, len(re_is))
-                ob_re_is.append(torch.tensor(re_is, dtype=torch.long))
+                ob_re_is.append(re_is)
             pair_re_is.append(ob_re_is)
         tr_enc_exps.append(pair_re_is)
 
     te_enc_exps = []
-    for idx in range(len(tr_f)):
+    for idx in range(len(te_f)):
         pair_re_is = []
         for oidx in range(2):
             ob_re_is = []
-            for re in tr_f[idx][oidx]:
+            for re in te_f[idx][oidx]:
                 re_is = [word_to_i["<s>"]]
                 for w in re:
                     if w not in word_to_i:
@@ -253,7 +255,7 @@ def make_lang_structures(tr_f, te_f):
                     re_is.append(i)
                 re_is.append(word_to_i["<e>"])
                 maxlen = max(maxlen, len(re_is))
-                ob_re_is.append(torch.tensor(re_is, dtype=torch.long))
+                ob_re_is.append(re_is)
             pair_re_is.append(ob_re_is)
         te_enc_exps.append(pair_re_is)
 
@@ -337,23 +339,30 @@ def main(args):
             tr_inputs = []
             tr_outputs = []
             for idx in range(len(tr_enc_exps[p])):
+                w_in_re_src = set()
                 for ridx in range(len(tr_enc_exps[p][idx][0])):
-                    for rjdx in range(len(tr_enc_exps[p][idx][1])):
-                        tr_inputs.append([1 if ((i < len(word_to_i[p]) and i in tr_enc_exps[p][idx][0][ridx]) or
-                                                (i >= len(word_to_i[p]) and i in tr_enc_exps[p][idx][1][rjdx])) else 0
-                                          for i in range(len(word_to_i[p]) * 2)])
-                        tr_outputs.append(train[p]["label"][idx])
+                    w_in_re_src.update(tr_enc_exps[p][idx][0][ridx])
+                w_in_re_tar = set()
+                for rjdx in range(len(tr_enc_exps[p][idx][1])):
+                    w_in_re_tar.update(tr_enc_exps[p][idx][1][rjdx])
+                tr_inputs.append([1 if ((i < len(word_to_i[p]) and i in w_in_re_src) or
+                                        (i >= len(word_to_i[p]) and i - len(word_to_i[p]) in w_in_re_tar)) else 0
+                                  for i in range(len(word_to_i[p]) * 2)])
+                tr_outputs.append(train[p]["label"][idx])
             te_inputs = []
             for idx in range(len(te_enc_exps[p])):
-                pairs_in = []
+                w_in_re_src = set()
                 for ridx in range(len(te_enc_exps[p][idx][0])):
-                    for rjdx in range(len(te_enc_exps[p][idx][1])):
-                        pairs_in.append([1 if ((i < len(word_to_i[p]) and i in te_enc_exps[p][idx][0][ridx]) or
-                                               (i >= len(word_to_i[p]) and i in te_enc_exps[p][idx][1][rjdx])) else 0
-                                         for i in range(len(word_to_i[p]) * 2)])
-                te_inputs.append(pairs_in)
+                    w_in_re_src.update(te_enc_exps[p][idx][0][ridx])
+                w_in_re_tar = set()
+                for rjdx in range(len(te_enc_exps[p][idx][1])):
+                    w_in_re_tar.update(te_enc_exps[p][idx][1][rjdx])
+                te_inputs.append([1 if ((i < len(word_to_i[p]) and i in w_in_re_src) or
+                                       (i >= len(word_to_i[p]) and i - len(word_to_i[p]) in w_in_re_tar)) else 0
+                                 for i in range(len(word_to_i[p]) * 2)])
             print("...... done")
-            rs[-1][p] = run_cat_naive_bayes(fs, tr_inputs, tr_outputs, te_inputs, test[p]["label"], verbose=verbose)
+            rs[-1][p] = run_cat_naive_bayes(fs, tr_inputs, train[p]["label"], te_inputs, test[p]["label"],
+                                            smooth=1, verbose=verbose)
         print ("... done")
 
     # Language encoder (train from scratch)
