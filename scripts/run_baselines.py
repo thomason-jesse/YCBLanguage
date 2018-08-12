@@ -47,9 +47,12 @@ def run_majority_class(tr_l, te_l):
 # tr_l - training labels
 # te_f - testing features
 # te_l - testing labels
-def run_cat_naive_bayes(fs, tr_f, tr_l, te_f, te_l):
+def run_cat_naive_bayes(fs, tr_f, tr_l, te_f, te_l,
+                        verbose=False):
 
     # Train: calculate the prior per class and the conditional likelihood of each feature given the class.
+    if verbose:
+        print("NB: training on " + str(len(tr_f)) + " inputs...")
     cf = {}  # class frequency
     ff_c = {}  # categorical feature frequency given class
     for idx in range(len(tr_f)):
@@ -64,8 +67,12 @@ def run_cat_naive_bayes(fs, tr_f, tr_l, te_f, te_l):
     cp = {c: cf[c] / float(len(tr_f)) for c in cf}  # class prior
     fp_c = {c: [{cat: ff_c[c][jdx][cat] / float(cf[c]) for cat in fs[jdx]} for jdx in range(len(tr_f[0]))]
             for c in ff_c}  # categorical feature probability given class
+    if verbose:
+        print("NB: ... done")
 
     # Test: calculate the joint likelihood of each class for each instance conditioned on its features.
+    if verbose:
+        print("NB: testing on " + str(len(te_f)) + " outputs...")
     cm = np.zeros(shape=(len(cp), len(cp)))
     for idx in range(len(te_f)):
         tc = te_l[idx]
@@ -73,6 +80,8 @@ def run_cat_naive_bayes(fs, tr_f, tr_l, te_f, te_l):
         y_probs = [cp[c] * reduce(lambda _x, _y: _x * _y, [fp_c[c][jdx][x[jdx]] for jdx in range(len(x))])
                    for c in cf]
         cm[tc][y_probs.index(max(y_probs))] += 1
+    if verbose:
+        print("NB: ... done")
 
     # Return accuracy and cm.
     return get_acc(cm), cm
@@ -120,15 +129,97 @@ class LSTMTagger(nn.Module):
 # verbose - whether to print epoch-wise progress
 # epochs - number of epochs to train
 # width - width of the encoder LSTM
-def run_lang_2_label(tr_f, tr_l, te_f, te_l,
-                     verbose=False, epochs=100, width=32):
+def run_lang_2_label(maxlen, word_to_i,
+                     tr_enc_exps, tr_l, te_enc_exps, te_l,
+                     verbose=False, width=32, batch_size=10000, epochs=22):
 
-    # Preprocess: turn words into one-hot vectors, count number of classes, construct model.
+    # Train on the cross product of every description of source and description of destination object.
+    if verbose:
+        print("L2L: preparing training and testing data...")
+    classes = []
+    tr_inputs = []
+    tr_outputs = []
+    p = nn.ConstantPad1d((0, maxlen), word_to_i["<_>"])
+    for idx in range(len(tr_enc_exps)):
+        for ridx in range(len(tr_enc_exps[idx][0])):
+            for rjdx in range(len(tr_enc_exps[idx][1])):
+                tr_inputs.append([p(tr_enc_exps[idx][0][ridx]), p(tr_enc_exps[idx][1][rjdx])])
+                tr_outputs.append(tr_l[idx])
+                if tr_l[idx] not in classes:
+                    classes.append(tr_l[idx])
+    tr_outputs = torch.tensor(tr_outputs, dtype=torch.long).view(len(tr_outputs), 1)
+
+    # At test time, run the model on the cross product of descriptions for the pair and sum logits.
+    te_inputs = []
+    for idx in range(len(te_enc_exps)):
+        pairs_in = []
+        for ridx in range(len(te_enc_exps[idx][0])):
+            for rjdx in range(len(te_enc_exps[idx][1])):
+                pairs_in.append([p(te_enc_exps[idx][0][ridx]), p(te_enc_exps[idx][1][rjdx])])
+        te_inputs.append(pairs_in)
+    if verbose:
+        print("L2L: ... done")
+
+    # Train: train a neural model for a fixed number of epochs.
+    if verbose:
+        print("L2L: training on " + str(len(tr_inputs)) + " inputs with batch size " + str(batch_size) + "...")
+    m = LSTMTagger(width, len(word_to_i), len(classes))
+    loss_function = nn.CrossEntropyLoss(ignore_index = word_to_i['<_>'])
+    optimizer = optim.SGD(m.parameters(), lr=0.1)
+    cm = acc = None
+    idxs = list(range(len(tr_inputs)))
+    np.random.shuffle(idxs)
+    tr_inputs = [tr_inputs[idx] for idx in idxs]
+    tr_outputs = tr_outputs[idxs, :]
+    idx = 0
+    c = 0
+    for epoch in range(epochs):
+
+        tloss = 0
+        c = 0
+        while c < batch_size:
+            m.zero_grad()
+            m.hidden_src = m.init_hidden()
+            m.hidden_des = m.init_hidden()
+            _, logits = m(tr_inputs[idx])
+            loss = loss_function(logits, tr_outputs[idx])
+            tloss += loss.data.item()
+            loss.backward()
+            optimizer.step()
+            c += 1
+            idx += 1
+            if idx == len(tr_inputs):
+                idx = 0
+        tloss /= len(tr_inputs)
+        print("... epoch " + str(epoch) + " train loss " + str(tloss))
+    if verbose:
+        print("L2L: ... done")
+
+    # Test: report accuracy after training.
+    if verbose:
+        print("L2L: calculating test-time accuracy...")
+    with torch.no_grad():
+        cm = np.zeros(shape=(len(classes), len(classes)))
+        for jdx in range(len(te_inputs)):
+            slogits = torch.zeros(1, len(classes))
+            for vidx in range(len(te_inputs[jdx])):
+                _, logits = m(te_inputs[jdx][vidx])
+                slogits += logits
+            pc = slogits.max(1)[1]
+            cm[tr_l[jdx]][pc] += 1
+        acc = get_acc(cm)
+    if verbose:
+        print("L2L: ... done; " + str(acc))
+
+    # Return accuracy and cm.
+    return get_acc(cm), cm
+
+
+def make_lang_structures(tr_f, te_f):
     word_to_i = {"<?>": 0, "<s>": 1, "<e>": 2, "<_>": 4}
     i_to_word = {0: "<?>", 1: "<s>", 2: "<e>", 3: "<_>"}
-    classes = []
     maxlen = 0
-    enc_exps = []
+    tr_enc_exps = []
     for idx in range(len(tr_f)):
         pair_re_is = []
         for oidx in range(2):
@@ -145,22 +236,8 @@ def run_lang_2_label(tr_f, tr_l, te_f, te_l,
                 maxlen = max(maxlen, len(re_is))
                 ob_re_is.append(torch.tensor(re_is, dtype=torch.long))
             pair_re_is.append(ob_re_is)
-        enc_exps.append(pair_re_is)
-        if tr_l[idx] not in classes:
-            classes.append(tr_l[idx])
+        tr_enc_exps.append(pair_re_is)
 
-    # Train on the cross product of every description of source and description of destination object.
-    tr_inputs = []
-    tr_outputs = []
-    p = nn.ConstantPad1d((0, maxlen), word_to_i["<_>"])
-    for idx in range(len(enc_exps)):
-        for ridx in range(len(enc_exps[idx][0])):
-            for rjdx in range(len(enc_exps[idx][1])):
-                tr_inputs.append([p(enc_exps[idx][0][ridx]), p(enc_exps[idx][1][rjdx])])
-                tr_outputs.append(tr_l[idx])
-    tr_outputs = torch.tensor(tr_outputs, dtype=torch.long).view(len(tr_outputs), 1)
-
-    # At test time, run the model on the cross product of descriptions for the pair and sum logits.
     te_enc_exps = []
     for idx in range(len(tr_f)):
         pair_re_is = []
@@ -179,57 +256,13 @@ def run_lang_2_label(tr_f, tr_l, te_f, te_l,
                 ob_re_is.append(torch.tensor(re_is, dtype=torch.long))
             pair_re_is.append(ob_re_is)
         te_enc_exps.append(pair_re_is)
-    te_inputs = []
-    te_outputs = []
-    for idx in range(len(te_enc_exps)):
-        pairs_in = []
-        for ridx in range(len(te_enc_exps[idx][0])):
-            for rjdx in range(len(te_enc_exps[idx][1])):
-                pairs_in.append([p(te_enc_exps[idx][0][ridx]), p(te_enc_exps[idx][1][rjdx])])
-        te_inputs.append(pairs_in)
-        te_outputs.append(tr_l[idx])
-    te_outputs = torch.tensor(te_outputs, dtype=torch.long).view(len(te_outputs), 1)
 
-    # Train: train a neural model for a fixed number of epochs.
-    m = LSTMTagger(width, len(word_to_i), len(classes))
-    loss_function = nn.CrossEntropyLoss(ignore_index = word_to_i['<_>'])
-    optimizer = optim.SGD(m.parameters(), lr=0.1)
-    cm = acc = None
-    for epoch in range(epochs):
-        tloss = 0
-        idxs = list(range(len(tr_inputs)))
-        np.random.shuffle(idxs)
-        tr_inputs = [tr_inputs[idx] for idx in idxs]
-        tr_outputs = tr_outputs[idxs, :]
-        for idx in range(len(tr_inputs)):
-            m.zero_grad()
-            m.hidden_src = m.init_hidden()
-            m.hidden_des = m.init_hidden()
-            _, logits = m(tr_inputs[idx])
-            loss = loss_function(logits, tr_outputs[idx])
-            tloss += loss.data.item()
-            loss.backward()
-            optimizer.step()
-        tloss /= len(tr_inputs)
-
-        # Test: report accuracy after every epoch, finally returning accuracy at the final one.
-        cm = np.zeros(shape=(len(classes), len(classes)))
-        with torch.no_grad():
-            for idx in range(len(te_inputs)):
-                slogits = torch.zeros(len(classes))
-                for vidx in range(len(te_inputs[idx])):
-                    _, logits = model(inputs)
-                    slogits += logits
-                pc = slogits.max(0)
-                cm[te_l[idx]][pc] += 1
-            acc = get_acc
-            print("... epoch " + str(epoch) + " train loss " + str(tloss) + "; test accuracy " + str(acc))
-
-    # Return accuracy and cm.
-    return get_acc(cm), cm
+    return word_to_i, i_to_word, maxlen, tr_enc_exps, te_enc_exps
 
 
 def main(args):
+    assert args.baseline is None or args.baseline in ['majority', 'nb_names', 'nb_bow', 'lstm']
+    verbose = True if args.verbose == 1 else False
 
     # Read in labeled folds.
     print("Reading in labeled folds from '" + args.infile + "'...")
@@ -253,37 +286,86 @@ def main(args):
     rs = []
 
     # Majority class baseline.
-    print("Running majority class baseline...")
-    bs.append("Majority Class")
-    rs.append({})
-    for p in preps:
-        rs[0][p] = run_majority_class(train[p]["label"], test[p]["label"])
-    print("... done")
+    if args.baseline is None or args.baseline == 'majority':
+        print("Running majority class baseline...")
+        bs.append("Majority Class")
+        rs.append({})
+        for p in preps:
+            rs[-1][p] = run_majority_class(train[p]["label"], test[p]["label"])
+        print("... done")
 
     # Majority class | object ids baseline.
-    print("Running Naive Bayes baseline...")
-    bs.append("Naive Bayes Obj One Hots")
-    rs.append({})
-    fs = [range(len(names)), range(len(names))]  # Two one-hot vectors of which object name was seen.
-    for p in preps:
-        tr_f = [[train[p][s][idx] for s in ["ob1", "ob2"]] for idx in
-                range(len(train[p]["ob1"]))]
-        te_f = [[test[p][s][idx] for s in ["ob1", "ob2"]] for idx in
-                range(len(test[p]["ob1"]))]
-        rs[1][p] = run_cat_naive_bayes(fs, tr_f, train[p]["label"], te_f, test[p]["label"])
-    print("... done")
+    if args.baseline is None or args.baseline == 'nb_names':
+        print("Running Naive Bayes baseline...")
+        bs.append("Naive Bayes Obj One Hots")
+        rs.append({})
+        fs = [range(len(names)), range(len(names))]  # Two one-hot vectors of which object name was seen.
+        for p in preps:
+            tr_f = [[train[p][s][idx] for s in ["ob1", "ob2"]] for idx in
+                    range(len(train[p]["ob1"]))]
+            te_f = [[test[p][s][idx] for s in ["ob1", "ob2"]] for idx in
+                    range(len(test[p]["ob1"]))]
+            rs[-1][p] = run_cat_naive_bayes(fs, tr_f, train[p]["label"], te_f, test[p]["label"], verbose=verbose)
+        print("... done")
+
+    # Prep language dictionary.
+    if args.baseline is None or args.baseline in ['nb_bow', 'lstm']:
+        print("Preparing infrastructure to run language models...")
+        tr_f = {}
+        te_f = {}
+        word_to_i = {}
+        i_to_word = {}
+        maxlen = {}
+        tr_enc_exps = {}
+        te_enc_exps = {}
+        for p in preps:
+            tr_f = [[res[train[p][s][idx]] for s in ["ob1", "ob2"]] for idx in
+                     range(len(train[p]["ob1"]))]
+            te_f = [[res[test[p][s][idx]] for s in ["ob1", "ob2"]] for idx in
+                     range(len(test[p]["ob1"]))]
+            word_to_i[p], i_to_word[p], maxlen[p], tr_enc_exps[p], te_enc_exps[p] = make_lang_structures(tr_f, te_f)
+        print("... done")
+
+    # Language naive bayes (bag of words)
+    if args.baseline is None or args.baseline == 'nb_bow':
+        print("Running BoW Naive Bayes...")
+        bs.append("BoW Naive Bayes")
+        rs.append({})
+        for p in preps:
+            print("... prepping model input and output data...")
+            fs = [[0, 1] for _ in range(len(word_to_i[p]) * 2)]  # Two BoW vectors; one for each object.
+            tr_inputs = []
+            tr_outputs = []
+            for idx in range(len(tr_enc_exps[p])):
+                for ridx in range(len(tr_enc_exps[p][idx][0])):
+                    for rjdx in range(len(tr_enc_exps[p][idx][1])):
+                        tr_inputs.append([1 if ((i < len(word_to_i[p]) and i in tr_enc_exps[p][idx][0][ridx]) or
+                                                (i >= len(word_to_i[p]) and i in tr_enc_exps[p][idx][1][rjdx])) else 0
+                                          for i in range(len(word_to_i[p]) * 2)])
+                        tr_outputs.append(train[p]["label"][idx])
+            te_inputs = []
+            for idx in range(len(te_enc_exps[p])):
+                pairs_in = []
+                for ridx in range(len(te_enc_exps[p][idx][0])):
+                    for rjdx in range(len(te_enc_exps[p][idx][1])):
+                        pairs_in.append([1 if ((i < len(word_to_i[p]) and i in te_enc_exps[p][idx][0][ridx]) or
+                                               (i >= len(word_to_i[p]) and i in te_enc_exps[p][idx][1][rjdx])) else 0
+                                         for i in range(len(word_to_i[p]) * 2)])
+                te_inputs.append(pairs_in)
+            print("...... done")
+            rs[-1][p] = run_cat_naive_bayes(fs, tr_inputs, tr_outputs, te_inputs, test[p]["label"], verbose=verbose)
+        print ("... done")
 
     # Language encoder (train from scratch)
-    print("Running language encoder baseline...")
-    bs.append("Language Encoder")
-    rs.append({})
-    for p in preps:
-        tr_f = [[res[train[p][s][idx]] for s in ["ob1", "ob2"]] for idx in
-                range(len(train[p]["ob1"]))]
-        te_f = [[res[test[p][s][idx]] for s in ["ob1", "ob2"]] for idx in
-                range(len(test[p]["ob1"]))]
-        rs[1][p] = run_lang_2_label(tr_f, train[p]["label"], te_f, test[p]["label"])
-    print("... done")
+    if args.baseline is None or args.baseline == 'lstm':
+        print("Running language encoder lstms...")
+        bs.append("Language Encoder")
+        rs.append({})
+        for p in preps:
+            rs[-1][p] = run_lang_2_label(maxlen[p], word_to_i[p],
+                                         tr_enc_exps[p], train[p]["label"], te_enc_exps[p], test[p]["label"],
+                                         verbose=verbose)
+        print("... done")
 
     # Show results.
     print("Results:")
@@ -302,4 +384,8 @@ if __name__ == "__main__":
                         help="input json file with train/dev/test split")
     parser.add_argument('--metadata_infile', type=str, required=True,
                         help="input json file with object metadata")
+    parser.add_argument('--baseline', type=str, required=False,
+                        help="if None, all will run, else 'majority', 'nb_names', 'nb_bow', 'lstm'")
+    parser.add_argument('--verbose', type=int, required=False,
+                        help="1 if desired")
     main(parser.parse_args())
