@@ -4,8 +4,13 @@ __author__ = 'thomason-jesse'
 
 import argparse
 import numpy as np
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import torch.optim as optim
 import json
 from functools import reduce
+from torch.autograd import Variable
 
 
 # Get accuracy from a confusion matrix.
@@ -73,6 +78,157 @@ def run_cat_naive_bayes(fs, tr_f, tr_l, te_f, te_l):
     return get_acc(cm), cm
 
 
+# Based on:
+# https://pytorch.org/tutorials/beginner/nlp/sequence_models_tutorial.html
+class LSTMTagger(nn.Module):
+
+    def __init__(self, width, vocab_size, num_classes):
+        super(LSTMTagger, self).__init__()
+        self.width = width
+        self.vocab_size = vocab_size
+        self.num_classes = num_classes
+
+        self.word_embeddings = nn.Embedding(vocab_size, width)
+        self.lstm_src = nn.LSTM(width, width)
+        self.lstm_des = nn.LSTM(width, width)
+        self.hidden2class = nn.Linear(width*2, num_classes)
+
+        self.hidden_src = self.init_hidden()
+        self.hidden_des = self.init_hidden()
+
+    def init_hidden(self):
+        return (torch.zeros(1, 1, self.width),
+                torch.zeros(1, 1, self.width))
+
+    def forward(self, res):
+        embeds_src = self.word_embeddings(res[0])
+        embeds_des = self.word_embeddings(res[0])
+        lstm_src_out, self.hidden_src = self.lstm_src(embeds_src.view(len(res[0]), 1, -1), self.hidden_src)
+        lstm_des_out, self.hidden_des = self.lstm_des(embeds_des.view(len(res[0]), 1, -1), self.hidden_des)
+        hcat = torch.cat((lstm_src_out, lstm_des_out), 0)
+        final_logits = self.hidden2class(hcat.view(len(res[0]), -1))[-1, :]
+        final_logits = final_logits.view(1, len(final_logits))
+        final_scores = F.softmax(final_logits, dim=1)
+        return final_scores, final_logits
+
+
+# Train an LSTM language encoder to predict the category label given language descriptions.
+# tr_f - lists of descriptions for training instances
+# tr_l - training labels
+# te_f - lists of descriptions for testing instances
+# te_l - testing labels
+# verbose - whether to print epoch-wise progress
+# epochs - number of epochs to train
+# width - width of the encoder LSTM
+def run_lang_2_label(tr_f, tr_l, te_f, te_l,
+                     verbose=False, epochs=100, width=32):
+
+    # Preprocess: turn words into one-hot vectors, count number of classes, construct model.
+    word_to_i = {"<?>": 0, "<s>": 1, "<e>": 2, "<_>": 4}
+    i_to_word = {0: "<?>", 1: "<s>", 2: "<e>", 3: "<_>"}
+    classes = []
+    maxlen = 0
+    enc_exps = []
+    for idx in range(len(tr_f)):
+        pair_re_is = []
+        for oidx in range(2):
+            ob_re_is = []
+            for re in tr_f[idx][oidx]:
+                re_is = [word_to_i["<s>"]]
+                for w in re:
+                    if w not in word_to_i:
+                        i = len(i_to_word)
+                        word_to_i[w] = i
+                        i_to_word[i] = w
+                    re_is.append(word_to_i[w])
+                re_is.append(word_to_i["<e>"])
+                maxlen = max(maxlen, len(re_is))
+                ob_re_is.append(torch.tensor(re_is, dtype=torch.long))
+            pair_re_is.append(ob_re_is)
+        enc_exps.append(pair_re_is)
+        if tr_l[idx] not in classes:
+            classes.append(tr_l[idx])
+
+    # Train on the cross product of every description of source and description of destination object.
+    tr_inputs = []
+    tr_outputs = []
+    p = nn.ConstantPad1d((0, maxlen), word_to_i["<_>"])
+    for idx in range(len(enc_exps)):
+        for ridx in range(len(enc_exps[idx][0])):
+            for rjdx in range(len(enc_exps[idx][1])):
+                tr_inputs.append([p(enc_exps[idx][0][ridx]), p(enc_exps[idx][1][rjdx])])
+                tr_outputs.append(tr_l[idx])
+    tr_outputs = torch.tensor(tr_outputs, dtype=torch.long).view(len(tr_outputs), 1)
+
+    # At test time, run the model on the cross product of descriptions for the pair and sum logits.
+    te_enc_exps = []
+    for idx in range(len(tr_f)):
+        pair_re_is = []
+        for oidx in range(2):
+            ob_re_is = []
+            for re in tr_f[idx][oidx]:
+                re_is = [word_to_i["<s>"]]
+                for w in re:
+                    if w not in word_to_i:
+                        i = word_to_i["<?>"]
+                    else:
+                        i = word_to_i[w]
+                    re_is.append(i)
+                re_is.append(word_to_i["<e>"])
+                maxlen = max(maxlen, len(re_is))
+                ob_re_is.append(torch.tensor(re_is, dtype=torch.long))
+            pair_re_is.append(ob_re_is)
+        te_enc_exps.append(pair_re_is)
+    te_inputs = []
+    te_outputs = []
+    for idx in range(len(te_enc_exps)):
+        pairs_in = []
+        for ridx in range(len(te_enc_exps[idx][0])):
+            for rjdx in range(len(te_enc_exps[idx][1])):
+                pairs_in.append([p(te_enc_exps[idx][0][ridx]), p(te_enc_exps[idx][1][rjdx])])
+        te_inputs.append(pairs_in)
+        te_outputs.append(tr_l[idx])
+    te_outputs = torch.tensor(te_outputs, dtype=torch.long).view(len(te_outputs), 1)
+
+    # Train: train a neural model for a fixed number of epochs.
+    m = LSTMTagger(width, len(word_to_i), len(classes))
+    loss_function = nn.CrossEntropyLoss(ignore_index = word_to_i['<_>'])
+    optimizer = optim.SGD(m.parameters(), lr=0.1)
+    cm = acc = None
+    for epoch in range(epochs):
+        tloss = 0
+        idxs = list(range(len(tr_inputs)))
+        np.random.shuffle(idxs)
+        tr_inputs = [tr_inputs[idx] for idx in idxs]
+        tr_outputs = tr_outputs[idxs, :]
+        for idx in range(len(tr_inputs)):
+            m.zero_grad()
+            m.hidden_src = m.init_hidden()
+            m.hidden_des = m.init_hidden()
+            _, logits = m(tr_inputs[idx])
+            loss = loss_function(logits, tr_outputs[idx])
+            tloss += loss.data.item()
+            loss.backward()
+            optimizer.step()
+        tloss /= len(tr_inputs)
+
+        # Test: report accuracy after every epoch, finally returning accuracy at the final one.
+        cm = np.zeros(shape=(len(classes), len(classes)))
+        with torch.no_grad():
+            for idx in range(len(te_inputs)):
+                slogits = torch.zeros(len(classes))
+                for vidx in range(len(te_inputs[idx])):
+                    _, logits = model(inputs)
+                    slogits += logits
+                pc = slogits.max(0)
+                cm[te_l[idx]][pc] += 1
+            acc = get_acc
+            print("... epoch " + str(epoch) + " train loss " + str(tloss) + "; test accuracy " + str(acc))
+
+    # Return accuracy and cm.
+    return get_acc(cm), cm
+
+
 def main(args):
 
     # Read in labeled folds.
@@ -85,6 +241,14 @@ def main(args):
         test = lf['dev']  # only ever peak at the dev set.
         preps = train.keys()
     print("... done")
+
+    # Read in metadata.
+    print("Reading in metadata from '" + args.metadata_infile + "'...")
+    with open(args.metadata_infile, 'r') as f:
+        d = json.load(f)
+        res = d["res"]
+    print("... done")
+
     bs = []
     rs = []
 
@@ -109,6 +273,18 @@ def main(args):
         rs[1][p] = run_cat_naive_bayes(fs, tr_f, train[p]["label"], te_f, test[p]["label"])
     print("... done")
 
+    # Language encoder (train from scratch)
+    print("Running language encoder baseline...")
+    bs.append("Language Encoder")
+    rs.append({})
+    for p in preps:
+        tr_f = [[res[train[p][s][idx]] for s in ["ob1", "ob2"]] for idx in
+                range(len(train[p]["ob1"]))]
+        te_f = [[res[test[p][s][idx]] for s in ["ob1", "ob2"]] for idx in
+                range(len(test[p]["ob1"]))]
+        rs[1][p] = run_lang_2_label(tr_f, train[p]["label"], te_f, test[p]["label"])
+    print("... done")
+
     # Show results.
     print("Results:")
     for idx in range(len(bs)):
@@ -124,4 +300,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--infile', type=str, required=True,
                         help="input json file with train/dev/test split")
+    parser.add_argument('--metadata_infile', type=str, required=True,
+                        help="input json file with object metadata")
     main(parser.parse_args())
