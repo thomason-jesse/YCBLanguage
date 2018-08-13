@@ -71,7 +71,7 @@ def main(args):
     # Read in CSV from Mturk run 2 and replace votes for affected pairs.
     print("Reading data from '" + args.infile_run2 + "'...")
     df = pd.read_csv(args.infile_run2)
-    overwrite_votes = set()
+    overwrite_votes = {"in": set(), "on": set()}
     for idx in df.index:
         for aidx in range(1, 36):
             ns = "%02d" % aidx
@@ -87,15 +87,16 @@ def main(args):
             # nans = -1 if ans == 0 else (1 if ans == 1 else 0)
             # Round "yes, but" votes (2) down to "no"
             nans = 1 if ans == 1 else -1
+            prep = "in" if aidx < 10 else "on"
 
             assert ob1 in objs
             assert ob2 in objs
             oidx = objs.index(ob1)
             ojdx = objs.index(ob2)
-            ow = True if (oidx, ojdx) not in overwrite_votes else False
-            overwrite_votes.add((oidx, ojdx))
+            ow = True if (oidx, ojdx) not in overwrite_votes[prep] else False
+            overwrite_votes[prep].add((oidx, ojdx))
 
-            if aidx < 10:
+            if prep == 'in':
                 assert oidx in obj_in
                 assert ojdx in obj_in[oidx]
                 if ow:
@@ -107,7 +108,7 @@ def main(args):
                 if ow:
                     obj_on[oidx][ojdx] = []
                 obj_on[oidx][ojdx].append(nans)
-    print("... done; overwrote votes for " + str(len(overwrite_votes)) + " pairs")
+    print("... done; overwrote votes for " + str(len(overwrite_votes["in"])) + " 'in' pairs, " + str(len(overwrite_votes["on"])) + " 'on' pairs")
 
     # Some basic stats.
     for prop, d in [["in", obj_in], ["on", obj_on]]:
