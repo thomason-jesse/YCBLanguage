@@ -214,7 +214,7 @@ def run_lang_2_label(maxlen, word_to_i,
         print("L2L: ... done; " + str(acc))
 
     # Return accuracy and cm.
-    return get_acc(cm), cm
+    return acc, cm
 
 
 def make_lang_structures(tr_f, te_f):

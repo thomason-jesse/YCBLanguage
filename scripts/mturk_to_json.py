@@ -25,9 +25,9 @@ import json
 
 def main(args):
 
-    # Read in CSV from MTurk to get uids.
-    print("Reading data from '" + args.infile + "'...")
-    df = pd.read_csv(args.infile)
+    # Read in CSV from MTurk run 1.
+    print("Reading data from '" + args.infile_run1 + "'...")
+    df = pd.read_csv(args.infile_run1)
     objs = []  # object names
     obj_in = {}  # keyed (ob1, ob2) for object 1 can fit into object 2, value list of -1, 0, 1 votes
     obj_on = {}  # keyed (ob1, ob2) for object 1 can be stacked onto object 2, value list of -1, 0, 1 votes
@@ -68,18 +68,59 @@ def main(args):
                 obj_on[oidx][ojdx].append(nans)
     print("... done")
 
+    # Read in CSV from Mturk run 2 and replace votes for affected pairs.
+    print("Reading data from '" + args.infile_run2 + "'...")
+    df = pd.read_csv(args.infile_run2)
+    overwrite_votes = set()
+    for idx in df.index:
+        for aidx in range(1, 36):
+            ns = "%02d" % aidx
+            ob1 = df['Input.img_' + ns + 'a_name'][idx] if 'Input.img_' + ns + 'a_name' in df \
+                else df['Answer.img_' + ns + 'a_name'][idx]
+            ob2 = df['Input.img_' + ns + 'b_name'][idx] if 'Input.img_' + ns + 'b_name' in df \
+                else df['Answer.img_' + ns + 'b_name'][idx]
+            ob1 = ob1.strip().replace("\t", "")
+            ob2 = ob2.strip().replace("\t", "")
+            ans = df['Answer.annotation' + ns + '-mental'][idx]
+
+            # Ignore "yes, but" votes (2)
+            # nans = -1 if ans == 0 else (1 if ans == 1 else 0)
+            # Round "yes, but" votes (2) down to "no"
+            nans = 1 if ans == 1 else -1
+
+            assert ob1 in objs
+            assert ob2 in objs
+            oidx = objs.index(ob1)
+            ojdx = objs.index(ob2)
+            ow = True if (oidx, ojdx) not in overwrite_votes else False
+            overwrite_votes.add((oidx, ojdx))
+
+            if aidx < 10:
+                assert oidx in obj_in
+                assert ojdx in obj_in[oidx]
+                if ow:
+                    obj_in[oidx][ojdx] = []
+                obj_in[oidx][ojdx].append(nans)
+            else:
+                assert oidx in obj_on
+                assert ojdx in obj_on[oidx]
+                if ow:
+                    obj_on[oidx][ojdx] = []
+                obj_on[oidx][ojdx].append(nans)
+    print("... done; overwrote votes for " + str(len(overwrite_votes)) + " pairs")
+
     # Some basic stats.
     for prop, d in [["in", obj_in], ["on", obj_on]]:
         print(prop + " stats:")
         num_votes = [len(d[oidx][ojdx]) for oidx in d for ojdx in d[oidx]]
-        total_by_num_votes = [num_votes.count(i) for i in range(1, 5)]
+        total_by_num_votes = [num_votes.count(i) for i in range(1, 6)]
         print("\tNum votes totals:\t" + str(total_by_num_votes))
         print("\tNum votes percent:\t" + str(["%0.2f" % (n / float(sum(total_by_num_votes)))
                                               for n in total_by_num_votes]))
         sum_votes = [sum(d[oidx][ojdx]) for oidx in d for ojdx in d[oidx]]
-        total_by_sum_votes = [sum_votes.count(i) for i in range(-4, 5)]
+        total_by_sum_votes = [sum_votes.count(i) for i in range(-5, 6)]
         print("\tSum votes percent:\t" + str([str(i) + ": %0.2f" % (n / float(len(sum_votes)))
-                                              for i, n in zip(range(-4, 5), total_by_sum_votes)]))
+                                              for i, n in zip(range(-5, 6), total_by_sum_votes)]))
         num_concensus = len([1 for oidx in d for ojdx in d[oidx]
                              if min(d[oidx][ojdx]) == max(d[oidx][ojdx])])
         num_offset = len([1 for oidx in d for ojdx in d[oidx]
@@ -110,8 +151,11 @@ def main(args):
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('--infile', type=str, required=True,
-                        help="input csv file")
+    parser.add_argument('--infile_run1', type=str, required=True,
+                        help="input csv file for the first round of mturk")
+    parser.add_argument('--infile_run2', type=str, required=True,
+                        help=("input csv file for the second round of mturk for" +
+                              " mismatched images from round 1"))
     parser.add_argument('--in_lang_vis', type=str, required=True,
                         help="input json with language and vision data")
     parser.add_argument('--outfile', type=str, required=True,

@@ -79,9 +79,9 @@ def main(args):
                 if args.label_technique == 'full':
                     s = sum(d[soidx][sojdx])
                     if len(d[soidx][sojdx]) == 4:
-                        if s <= -3:  # one dissenting "yes" or agreement
+                        if s <= -3:  # one/two dissenting "yes" or agreement
                             to_label = 0
-                        elif s >= 3:  # one dissenting "no" or agreement
+                        elif s >= 3:  # one/two dissenting "no" or agreement
                             to_label = 3
                     elif len(d[soidx][sojdx]) == 3:
                         to_label = (s + 3) // 2
