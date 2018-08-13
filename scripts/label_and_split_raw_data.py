@@ -215,7 +215,8 @@ def main(args):
     # Write outfile.
     print("Writing labeled folds to '" + args.outfile + "'...")
     with open(args.outfile, 'w') as f:
-        json.dump({"names": all_d["names"], "folds": lf}, f)
+        json.dump({"names": all_d["names"], "folds": lf},
+                  f, indent=2)
     print("... done")
 
 

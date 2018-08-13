@@ -129,9 +129,11 @@ class LSTMTagger(nn.Module):
 # verbose - whether to print epoch-wise progress
 # epochs - number of epochs to train
 # width - width of the encoder LSTM
+# batch_size - number of training examples to run before gradient update
+# epochs - number of epochs to run over data; if None, runs over all data once
 def run_lang_2_label(maxlen, word_to_i,
                      tr_enc_exps, tr_l, te_enc_exps, te_l,
-                     verbose=False, width=32, batch_size=10000, epochs=22):
+                     verbose=False, width=16, batch_size=100, epochs=None):
 
     # Train on the cross product of every description of source and description of destination object.
     if verbose:
@@ -149,6 +151,8 @@ def run_lang_2_label(maxlen, word_to_i,
                 if tr_l[idx] not in classes:
                     classes.append(tr_l[idx])
     tr_outputs = torch.tensor(tr_outputs, dtype=torch.long).view(len(tr_outputs), 1)
+    if epochs is None:  # iterate given the batch size to cover all data at least once
+        epochs = int(np.ceil(len(tr_inputs) / float(batch_size)))
 
     # At test time, run the model on the cross product of descriptions for the pair and sum logits.
     te_inputs = []
@@ -164,10 +168,10 @@ def run_lang_2_label(maxlen, word_to_i,
 
     # Train: train a neural model for a fixed number of epochs.
     if verbose:
-        print("L2L: training on " + str(len(tr_inputs)) + " inputs with batch size " + str(batch_size) + "...")
+        print("L2L: training on " + str(len(tr_inputs)) + " inputs with batch size " + str(batch_size) + " for " + str(epochs) + " epochs...")
     m = LSTMTagger(width, len(word_to_i), len(classes))
     loss_function = nn.CrossEntropyLoss(ignore_index = word_to_i['<_>'])
-    optimizer = optim.SGD(m.parameters(), lr=0.1)
+    optimizer = optim.SGD(m.parameters(), lr=0.001)  # TODO: this could be touched up.
     cm = acc = None
     idxs = list(range(len(tr_inputs)))
     np.random.shuffle(idxs)
@@ -176,7 +180,6 @@ def run_lang_2_label(maxlen, word_to_i,
     idx = 0
     c = 0
     for epoch in range(epochs):
-
         tloss = 0
         c = 0
         while c < batch_size:
@@ -216,8 +219,11 @@ def run_lang_2_label(maxlen, word_to_i,
     # Return accuracy and cm.
     return acc, cm
 
-
-def make_lang_structures(tr_f, te_f):
+# Make the language structures needed for other models.
+# tr_f - referring expression structure for training
+# te_f - referring expresison structure for testing
+# inc_test - whether to 'see' test words unseen during training (UNK when false)
+def make_lang_structures(tr_f, te_f, inc_test=False):
     word_to_i = {"<?>": 0, "<s>": 1, "<e>": 2, "<_>": 4}
     i_to_word = {0: "<?>", 1: "<s>", 2: "<e>", 3: "<_>"}
     maxlen = 0
@@ -249,9 +255,12 @@ def make_lang_structures(tr_f, te_f):
                 re_is = [word_to_i["<s>"]]
                 for w in re:
                     if w not in word_to_i:
-                        i = word_to_i["<?>"]
-                    else:
-                        i = word_to_i[w]
+                        if inc_test:
+                            i = len(i_to_word)
+                            word_to_i[w] = i
+                            i_to_word[i] = w
+                        else:
+                            i = word_to_i["<?>"]
                     re_is.append(i)
                 re_is.append(word_to_i["<e>"])
                 maxlen = max(maxlen, len(re_is))
@@ -262,8 +271,129 @@ def make_lang_structures(tr_f, te_f):
     return word_to_i, i_to_word, maxlen, tr_enc_exps, te_enc_exps
 
 
+# Get GLoVe vectors from target input file for given vocabulary.
+# fn - the filename where the GLoVe vectors live.
+# ws - the list of words to look up.
+def get_glove_vectors(fn, ws):
+    g = {}
+    with open(fn, 'r') as f:
+        lines = f.readlines()
+        for line in lines:
+            p = line.strip().split(' ')
+            w = p[0]
+            if w in ws:
+                v = np.array([float(n) for n in p[1:]])
+                g[w] = v
+    m = 0
+    for w in ws:
+        if w not in g:
+            m += 1
+            v = np.zeros(len(g[list(g.keys())[0]]))
+            g[w] = v
+    assert set(g.keys()) == ws
+    return g, m
+
+
+# Run a GLoVe-based model (either perceptron or FF network with relu activations)
+# glove - a dictionary mapping all vocabulary words to their glove embedding vectors
+# tr_f - lists of descriptions for training instances
+# tr_l - training labels
+# te_f - lists of descriptions for testing instances
+# te_l - testing labels
+# layers - a list of hidden widths for a FF network or None to create a linear perceptron
+# verbose - whether to print epoch-wise progress
+# Reference: https://github.com/jcjohnson/pytorch-examples/blob/master/nn/two_layer_net_nn.py
+def run_glove_based_model(glove,
+                          tr_f, tr_l, te_f, te_l,
+                          layers=None, batch_size=None, epochs=None,
+                          verbose=False):
+    assert batch_size is not None or epochs is not None
+
+    # Prepare the data.
+    print("Glove: preparing training and testing data...")
+    tr_inputs = []
+    te_inputs = []
+    classes = []
+    for model_in, orig_in, orig_out in [[tr_inputs, tr_f, tr_l], [te_inputs, te_f, te_l]]:
+        for idx in range(len(orig_in)):
+            ob1_ws = [w for ws in orig_in[idx][0] for w in ws]
+            avg_ob1_glove = np.sum([glove[w] for w in ob1_ws], axis=0) / len(ob1_ws)
+            ob2_ws = [w for ws in orig_in[idx][1] for w in ws]
+            avg_ob2_glove = np.sum([glove[w] for w in ob2_ws], axis=0) / len(ob2_ws)
+            incat = np.concatenate((avg_ob1_glove, avg_ob2_glove))
+            model_in.append(torch.tensor(incat, dtype=torch.float))
+            inwidth = len(model_in[-1])
+            if orig_out[idx] not in classes:
+                classes.append(orig_out[idx])
+    outwidth = len(classes)
+    tr_outputs = torch.tensor(tr_l, dtype=torch.long).view(len(tr_l), 1)
+    te_outputs = torch.tensor(te_l, dtype=torch.long).view(len(te_l), 1)
+    if epochs is None:  # iterate given the batch size to cover all data at least once
+        epochs = int(np.ceil(len(tr_inputs) / float(batch_size)))
+    if batch_size is None:
+        batch_size = len(tr_inputs)
+    print("Glove: ... done")
+
+    # Construct the model with specified number of hidden layers / dimensions (or none) and relu activations between.
+    print("Glove: constructing model...")
+    if layers is not None:
+        l = [nn.Linear(inwidth, layers[0])]
+        for idx in range(1, len(layers)):
+            l.append(torch.nn.ReLU())
+            l.append(nn.Linear(layers[idx - 1], layers[idx]))
+        l.append(torch.nn.ReLU())
+        l.append(nn.Linear(layers[-1], outwidth))
+    else:
+        l = [nn.Linear(inwidth, outwidth)]
+    model = nn.Sequential(*l)
+    print("Glove: ... done")
+
+        # Train: train a neural model for a fixed number of epochs.
+    if verbose:
+        print("Glove: training on " + str(len(tr_inputs)) + " inputs with batch size " + str(batch_size) + " for " + str(epochs) + " epochs...")
+    loss_function = nn.CrossEntropyLoss()
+    optimizer = optim.SGD(model.parameters(), lr=0.001)  # TODO: this could be touched up.
+    cm = acc = None
+    idxs = list(range(len(tr_inputs)))
+    np.random.shuffle(idxs)
+    tr_inputs = [tr_inputs[idx] for idx in idxs]
+    tr_outputs = tr_outputs[idxs, :]
+    idx = 0
+    c = 0
+    for epoch in range(epochs):
+        tloss = 0
+        c = 0
+        while c < batch_size:
+            model.zero_grad()
+            logits = model(tr_inputs[idx])
+            loss = loss_function(logits.view(1, len(logits)), tr_outputs[idx])
+            tloss += loss.data.item()
+            loss.backward()
+            optimizer.step()
+            c += 1
+            idx += 1
+            if idx == len(tr_inputs):
+                idx = 0
+        tloss /= batch_size
+
+        with torch.no_grad():
+            cm = np.zeros(shape=(len(classes), len(classes)))
+            for jdx in range(len(te_inputs)):
+                logits = model(te_inputs[jdx])
+                pc = logits.max(0)[1]
+                cm[te_l[jdx]][pc] += 1
+            acc = get_acc(cm)
+
+        print("... epoch " + str(epoch) + " train loss " + str(tloss) + "; test accuracy " + str(acc))
+    if verbose:
+        print("Glove: ... done")
+
+    return acc, cm
+
+
 def main(args):
-    assert args.baseline is None or args.baseline in ['majority', 'nb_names', 'nb_bow', 'lstm']
+    assert args.baseline is None or args.baseline in ['majority', 'nb_names', 'nb_bow', 'lstm', 'glove']
+    assert args.glove_infile is not None or (args.baseline is not None and args.baseline != 'glove')
     verbose = True if args.verbose == 1 else False
 
     # Read in labeled folds.
@@ -311,11 +441,12 @@ def main(args):
         print("... done")
 
     # Prep language dictionary.
-    if args.baseline is None or args.baseline in ['nb_bow', 'lstm']:
+    if args.baseline is None or args.baseline in ['nb_bow', 'lstm', 'glove']:
         print("Preparing infrastructure to run language models...")
         tr_f = {}
         te_f = {}
         word_to_i = {}
+        word_to_i_all = {}
         i_to_word = {}
         maxlen = {}
         tr_enc_exps = {}
@@ -326,6 +457,7 @@ def main(args):
             te_f = [[res[test[p][s][idx]] for s in ["ob1", "ob2"]] for idx in
                      range(len(test[p]["ob1"]))]
             word_to_i[p], i_to_word[p], maxlen[p], tr_enc_exps[p], te_enc_exps[p] = make_lang_structures(tr_f, te_f)
+            word_to_i_all[p], _, _, _, _ = make_lang_structures(tr_f, te_f, inc_test=True)
         print("... done")
 
     # Language naive bayes (bag of words)
@@ -373,8 +505,35 @@ def main(args):
         for p in preps:
             rs[-1][p] = run_lang_2_label(maxlen[p], word_to_i[p],
                                          tr_enc_exps[p], train[p]["label"], te_enc_exps[p], test[p]["label"],
-                                         verbose=verbose)
+                                         verbose=verbose, batch_size=10000)
         print("... done")
+
+    # Average GLoVe embeddings concatenated and directly used to predict class. (perceptron)
+    if args.baseline is None or args.baseline == 'glove':
+        print("Preparing infrastructure to run GLoVe-based models...")
+        ws = set()
+        for p in preps:
+            ws.update(word_to_i_all[p].keys())
+        g, missing = get_glove_vectors(args.glove_infile, ws)
+        emb_dim = len(g[list(g.keys())[0]])
+        print("... done; missing " + str(missing) + " vectors out of " + str(len(ws)))
+
+        print("Running GLoVe models")
+        bs.extend(["GLoVe Perceptron", "GLoVe 1l", "GLoVe 2l"])
+        rs.extend([{}, {}, {}])
+        for p in preps:
+            tr_f = [[res[train[p][s][idx]] for s in ["ob1", "ob2"]] for idx in
+                     range(len(train[p]["ob1"]))]
+            te_f = [[res[test[p][s][idx]] for s in ["ob1", "ob2"]] for idx in
+                     range(len(test[p]["ob1"]))]
+            rs[-3][p] = run_glove_based_model(g, tr_f, train[p]["label"], te_f, test[p]["label"],
+                                              epochs=30, verbose=verbose)
+            rs[-2][p] = run_glove_based_model(g, tr_f, train[p]["label"], te_f, test[p]["label"],
+                                              layers=[emb_dim // 2],
+                                              epochs=30, verbose=verbose)
+            rs[-1][p] = run_glove_based_model(g, tr_f, train[p]["label"], te_f, test[p]["label"],
+                                              layers=[emb_dim // 2, emb_dim // 4],
+                                              epochs=30, verbose=verbose)
 
     # Show results.
     print("Results:")
@@ -394,7 +553,9 @@ if __name__ == "__main__":
     parser.add_argument('--metadata_infile', type=str, required=True,
                         help="input json file with object metadata")
     parser.add_argument('--baseline', type=str, required=False,
-                        help="if None, all will run, else 'majority', 'nb_names', 'nb_bow', 'lstm'")
+                        help="if None, all will run, else 'majority', 'nb_names', 'nb_bow', 'lstm', 'glove'")
+    parser.add_argument('--glove_infile', type=str, required=False,
+                        help="input glove vector text file if running glove baseline")
     parser.add_argument('--verbose', type=int, required=False,
                         help="1 if desired")
     main(parser.parse_args())
