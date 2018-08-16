@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 __author__ = 'thomason-jesse'
-# Takes in the split and labeled data folds, runs simple baselines and reports performance.
+# Takes in the split and labeled data folds, runs baselines and reports performance.
 
 import argparse
+import json
 import numpy as np
+import os
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
-import json
 from functools import reduce
 from PIL import Image
 from torchvision.models import resnet
@@ -313,10 +314,11 @@ def get_bow_vectors(ws):
 
 
 # Run a GLoVe-based model (either perceptron or FF network with relu activations)
-# wv - a dictionary mapping all vocabulary words to their word vectors
-# tr_f - lists of descriptions for training instances
+# wv - list (by modality) of dictionaries mapping all vocabulary words to their word vectors
+# tr_f - list of feature modalities, indexed then by oidx, each has a list of input lists whose members can be looked
+#        up in the vocabulary to vector dictionary wv
 # tr_l - training labels
-# te_f - lists of descriptions for testing instances
+# te_f - same as tr_f but for testing
 # te_l - testing labels
 # layers - a list of hidden widths for a FF network or None to create a linear perceptron
 # verbose - whether to print epoch-wise progress
@@ -333,13 +335,18 @@ def run_ff_model(wv, tr_f, tr_l, te_f, te_l,
     classes = []
     inwidth = None
     for model_in, orig_in, orig_out in [[tr_inputs, tr_f, tr_l], [te_inputs, te_f, te_l]]:
-        for idx in range(len(orig_in)):
-            ob1_ws = [w for ws in orig_in[idx][0] for w in ws]
-            avg_ob1_v = np.sum([wv[w] for w in ob1_ws], axis=0) / len(ob1_ws)
-            ob2_ws = [w for ws in orig_in[idx][1] for w in ws]
-            avg_ob2_v = np.sum([wv[w] for w in ob2_ws], axis=0) / len(ob2_ws)
-            incat = np.concatenate((avg_ob1_v, avg_ob2_v))
-            model_in.append(torch.tensor(incat, dtype=torch.float))
+        for idx in range(len(orig_in[0])):
+            cat_v = []
+            for midx in range(len(orig_in)):
+                v = wv[midx]
+                modality = orig_in[midx]
+                ob1_ws = [w for ws in modality[idx][0] for w in ws]
+                avg_ob1_v = np.sum([v[w] for w in ob1_ws], axis=0) / len(ob1_ws)
+                ob2_ws = [w for ws in modality[idx][1] for w in ws]
+                avg_ob2_v = np.sum([v[w] for w in ob2_ws], axis=0) / len(ob2_ws)
+                incat = np.concatenate((avg_ob1_v, avg_ob2_v))
+                cat_v = np.concatenate((cat_v, incat))
+            model_in.append(torch.tensor(cat_v, dtype=torch.float))
             inwidth = len(model_in[-1])
             if orig_out[idx] not in classes:
                 classes.append(orig_out[idx])
@@ -371,13 +378,12 @@ def run_ff_model(wv, tr_f, tr_l, te_f, te_l,
               " for " + str(epochs) + " epochs...")
     loss_function = nn.CrossEntropyLoss()
     optimizer = optim.SGD(model.parameters(), lr=0.001)  # TODO: this could be touched up.
-    cm = acc = None
+    best_acc = best_cm = None
     idxs = list(range(len(tr_inputs)))
     np.random.shuffle(idxs)
     tr_inputs = [tr_inputs[idx] for idx in idxs]
     tr_outputs = tr_outputs[idxs, :]
     idx = 0
-    c = 0
     for epoch in range(epochs):
         tloss = 0
         c = 0
@@ -403,18 +409,21 @@ def run_ff_model(wv, tr_f, tr_l, te_f, te_l,
                 pc = logits.max(0)[1]
                 cm[te_l[jdx]][pc] += 1
             acc = get_acc(cm)
+            if best_acc is None or acc > best_acc:
+                best_acc = acc
+                best_cm = cm
 
         print("... epoch " + str(epoch) + " train loss " + str(tloss) + "; train accuracy " + str(get_acc(trcm)) +
               "; test accuracy " + str(acc))
     if verbose:
         print("FF: ... done")
 
-    return acc, cm
+    return best_acc, best_cm
 
 
 def main(args):
     assert args.baseline is None or args.baseline in ['majority', 'nb_names', 'nb_bow',
-                                                      'lstm', 'glove', 'nn_bow', 'resnet']
+                                                      'lstm', 'glove', 'nn_bow', 'resnet', 'glove+resnet']
     assert args.glove_infile is not None or (args.baseline is not None and args.baseline != 'glove')
     verbose = True if args.verbose == 1 else False
 
@@ -465,7 +474,7 @@ def main(args):
 
     # Prep language dictionary.
     maxlen = tr_enc_exps = te_enc_exps = word_to_i_all = word_to_i = None
-    if args.baseline is None or args.baseline in ['nb_bow', 'lstm', 'glove', 'nn_bow']:
+    if args.baseline is None or args.baseline in ['nb_bow', 'lstm', 'glove', 'nn_bow', 'glove+resnet']:
         print("Preparing infrastructure to run language models...")
         word_to_i = {}
         word_to_i_all = {}
@@ -531,15 +540,18 @@ def main(args):
         print("... done")
 
     # Average GLoVe embeddings concatenated and used to predict class.
-    if args.baseline is None or args.baseline == 'glove':
+    g = None
+    emb_dim_l = None
+    if args.baseline is None or args.baseline == 'glove' or args.baseline == 'glove+resnet':
         print("Preparing infrastructure to run GLoVe-based feed forward models...")
         ws = set()
         for p in preps:
             ws.update(word_to_i_all[p].keys())
         g, missing = get_glove_vectors(args.glove_infile, ws)
-        emb_dim = len(g[list(g.keys())[0]])
+        emb_dim_l = len(g[list(g.keys())[0]])
         print("... done; missing " + str(missing) + " vectors out of " + str(len(ws)))
 
+    if args.baseline is None or args.baseline == 'glove':
         print("Running GLoVe models")
         bs.extend(["GLoVe Perceptron", "GLoVe 1l FF", "GLoVe 2l FF"])
         rs.extend([{}, {}, {}])
@@ -548,12 +560,12 @@ def main(args):
                      range(len(train[p]["ob1"]))]
             te_f = [[res[test[p][s][idx]] for s in ["ob1", "ob2"]] for idx in
                      range(len(test[p]["ob1"]))]
-            rs[-3][p] = run_ff_model(g, tr_f, train[p]["label"], te_f, test[p]["label"],
+            rs[-3][p] = run_ff_model([g], [tr_f], train[p]["label"], [te_f], test[p]["label"],
                                      epochs=30, verbose=verbose)
-            rs[-2][p] = run_ff_model(g, tr_f, train[p]["label"], te_f, test[p]["label"],
-                                     layers=[emb_dim // 2], epochs=30, verbose=verbose)
-            rs[-1][p] = run_ff_model(g, tr_f, train[p]["label"], te_f, test[p]["label"],
-                                     layers=[emb_dim // 2, emb_dim // 4], epochs=30, verbose=verbose)
+            rs[-2][p] = run_ff_model([g], [tr_f], train[p]["label"], [te_f], test[p]["label"],
+                                     layers=[emb_dim_l // 2], epochs=30, verbose=verbose)
+            rs[-1][p] = run_ff_model([g], [tr_f], train[p]["label"], [te_f], test[p]["label"],
+                                     layers=[emb_dim_l // 2, emb_dim_l // 4], epochs=30, verbose=verbose)
 
     # Average BoW embeddings use to predict class.
     if args.baseline is None or args.baseline == 'nn_bow':
@@ -573,29 +585,41 @@ def main(args):
                     range(len(train[p]["ob1"]))]
             te_f = [[res[test[p][s][idx]] for s in ["ob1", "ob2"]] for idx in
                     range(len(test[p]["ob1"]))]
-            rs[-3][p] = run_ff_model(wv, tr_f, train[p]["label"], te_f, test[p]["label"],
+            rs[-3][p] = run_ff_model([wv], [tr_f], train[p]["label"], [te_f], test[p]["label"],
                                      epochs=30, verbose=verbose)
-            rs[-2][p] = run_ff_model(wv, tr_f, train[p]["label"], te_f, test[p]["label"],
+            rs[-2][p] = run_ff_model([wv], [tr_f], train[p]["label"], [te_f], test[p]["label"],
                                      layers=[emb_dim // 2], epochs=30, verbose=verbose)
-            rs[-1][p] = run_ff_model(wv, tr_f, train[p]["label"], te_f, test[p]["label"],
+            rs[-1][p] = run_ff_model([wv], [tr_f], train[p]["label"], [te_f], test[p]["label"],
                                      layers=[emb_dim // 2, emb_dim // 4], epochs=30, verbose=verbose)
 
     # Average BoW embeddings use to predict class.
-    if args.baseline is None or args.baseline == 'resnet':
-        print("Preparing infrastructure to run resnet-based feed forward models...")
+    idx_to_v = None
+    emb_dim_v = None
+    if args.baseline is None or args.baseline == 'resnet' or args.baseline == 'glove+resnet':
+        print("Preparing infrastructure to run ResNet-based feed forward models...")
         idx_to_v = {}
         resnet_m = resnet.resnet152(pretrained=True)
         plm = nn.Sequential(*list(resnet_m.children())[:-1])
         tt = ToTensor()
         for idx in range(len(names)):
-            pil = Image.open(imgs[idx])
-            pil = resize(pil, (224, 244))
-            im = tt(pil)
-            im = torch.unsqueeze(im, 0)
-            idx_to_v[idx] = plm(im).detach().data.numpy().flatten()
-        emb_dim = len(idx_to_v[0])
+            ffn = imgs[idx] + '.resnet'
+            if os.path.isfile(ffn):
+                with open(ffn, 'r') as f:
+                    d = f.read().strip().split(' ')
+                    v = np.array([float(n) for n in d])
+                    idx_to_v[idx] = v
+            else:
+                pil = Image.open(imgs[idx])
+                pil = resize(pil, (224, 244))
+                im = tt(pil)
+                im = torch.unsqueeze(im, 0)
+                idx_to_v[idx] = plm(im).detach().data.numpy().flatten()
+                with open(ffn, 'w') as f:
+                    f.write(' '.join([str(i) for i in idx_to_v[idx]]))
+        emb_dim_v = len(idx_to_v[0])
         print("... done")
 
+    if args.baseline is None or args.baseline == 'resnet':
         print("Running ResNet FF models")
         bs.extend(["ResNet Perceptron", "ResNet 1l FF", "ResNet 2l FF"])
         rs.extend([{}, {}, {}])
@@ -608,11 +632,35 @@ def main(args):
                     range(len(train[p]["ob1"]))]
             te_f = [[[[test[p][s][idx]]] for s in ["ob1", "ob2"]] for idx in
                     range(len(test[p]["ob1"]))]
-            rs[-3][p] = run_ff_model(idx_to_v, tr_f, train[p]["label"], te_f, test[p]["label"],
+            rs[-3][p] = run_ff_model([idx_to_v], [tr_f], train[p]["label"], [te_f], test[p]["label"],
                                      epochs=30, verbose=verbose)
-            rs[-2][p] = run_ff_model(idx_to_v, tr_f, train[p]["label"], te_f, test[p]["label"],
+            rs[-2][p] = run_ff_model([idx_to_v], [tr_f], train[p]["label"], [te_f], test[p]["label"],
+                                     layers=[emb_dim_v // 2], epochs=30, verbose=verbose)
+            rs[-1][p] = run_ff_model([idx_to_v], [tr_f], train[p]["label"], [te_f], test[p]["label"],
+                                     layers=[emb_dim_v // 2, emb_dim_v // 4], epochs=30, verbose=verbose)
+
+    if args.baseline is None or args.baseline == 'glove+resnet':
+        print("Running Glove+ResNet FF models")
+        bs.extend(["GLoVe+ResNet Perceptron", "GLoVe+ResNet 1l FF", "GLoVe+ResNet 2l FF"])
+        rs.extend([{}, {}, {}])
+        emb_dim = emb_dim_l + emb_dim_v
+        for p in preps:
+            tr_f_l = [[res[train[p][s][idx]] for s in ["ob1", "ob2"]] for idx in
+                    range(len(train[p]["ob1"]))]
+            te_f_l = [[res[test[p][s][idx]] for s in ["ob1", "ob2"]] for idx in
+                    range(len(test[p]["ob1"]))]
+            tr_f_v = [[[[train[p][s][idx]]] for s in ["ob1", "ob2"]] for idx in
+                    range(len(train[p]["ob1"]))]
+            te_f_v = [[[[test[p][s][idx]]] for s in ["ob1", "ob2"]] for idx in
+                    range(len(test[p]["ob1"]))]
+            rs[-3][p] = run_ff_model([g, idx_to_v], [tr_f_l, tr_f_v], train[p]["label"],
+                                     [te_f_l, te_f_v], test[p]["label"],
+                                     epochs=30, verbose=verbose)
+            rs[-2][p] = run_ff_model([g, idx_to_v], [tr_f_l, tr_f_v], train[p]["label"],
+                                     [te_f_l, te_f_v], test[p]["label"],
                                      layers=[emb_dim // 2], epochs=30, verbose=verbose)
-            rs[-1][p] = run_ff_model(idx_to_v, tr_f, train[p]["label"], te_f, test[p]["label"],
+            rs[-1][p] = run_ff_model([g, idx_to_v], [tr_f_l, tr_f_v], train[p]["label"],
+                                     [te_f_l, te_f_v], test[p]["label"],
                                      layers=[emb_dim // 2, emb_dim // 4], epochs=30, verbose=verbose)
 
     # Show results.
@@ -634,7 +682,7 @@ if __name__ == "__main__":
                         help="input json file with object metadata")
     parser.add_argument('--baseline', type=str, required=False,
                         help="if None, all will run, else 'majority', 'nb_names', 'nb_bow', 'lstm', 'glove'," +
-                             " 'nn_bow', 'resnet'")
+                             " 'nn_bow', 'resnet', 'glove+resnet'")
     parser.add_argument('--glove_infile', type=str, required=False,
                         help="input glove vector text file if running glove baseline")
     parser.add_argument('--verbose', type=int, required=False,
