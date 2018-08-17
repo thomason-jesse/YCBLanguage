@@ -18,7 +18,6 @@ __author__ = 'thomason-jesse'
 # }
 
 import argparse
-import numpy as np
 import pandas as pd
 import json
 
