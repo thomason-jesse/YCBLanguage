@@ -11,12 +11,14 @@ import time
 
 
 def main(args):
+    assert args.metric in ['acc', 'f1']
 
     # At every update stage, launch jobs up to num_jobs limit until the total number of launched jobs ever
     # is equal to the num_models we want to test. Report best-so-far model at each timestep that it changes.
     preps = ["in", "on"]
     best_params = {p: None for p in preps}
-    best_acc = {p: 0 for p in preps}
+    best_score = {p: 0 for p in preps}
+    score_idx = 0 if args.metric == 'acc' else 1
     total_models_finished = 0
     curr_jobs = {jidx: None for jidx in range(args.num_jobs)}
     print("spinning until all " + str(args.num_models) + " models have been run...")
@@ -32,7 +34,7 @@ def main(args):
             # New hyperparamters for this job.
             d = {}
             d['layers'] = np.random.randint(0, 4)  # 0 - 3 layers
-            d['width_decay'] = 1 + np.random.rand() * 4  # 1 - 3 width decay rate
+            d['width_decay'] = 3 + np.random.rand() * 2  # 3 - 5 width decay rate
             d['dropout'] = np.random.rand() * 0.5  # in [0, 0.5]
             d['lr'] = np.power(10, (-1 - np.random.rand() * 3))  # 0.1 to 0.0001
             d['opt'] = np.random.choice(['adagrad', 'adam', 'rmsprop', 'sgd'])
@@ -68,13 +70,14 @@ def main(args):
                         with open(fn_out, 'r') as f:
                             d = json.load(f)[0]  # only ran one model, so take it out of the list results
                             for p in preps:
-                                if d[p] > best_acc[p]:  # val accuracy
-                                    best_acc[p] = d[p]
+                                if d[p][score_idx] > best_score[p]:  # val accuracy or f1
+                                    best_score[p] = d[p][score_idx]
                                     with open(fn, 'r') as fhp:
                                         hp = json.load(fhp)
                                         best_params[p] = hp
                                     best_changed[p] = True
-                                    os.system("cp " + fn + " " + args.hyperparam_outfile_prefix + "." + p + ".best")
+                                    os.system("cp " + fn + " " + args.hyperparam_outfile_prefix + "." + p + "." +
+                                              args.metric + ".best")
                             os.system("rm " + fn)
                         os.system("rm " + fn_out)
                         jobs_finished += 1
@@ -91,7 +94,7 @@ def main(args):
             for p in preps:
                 if best_changed[p]:
                     print("...... new best '" + p + "' hyperparams: " +
-                          str(best_params[p]) + " with acc " + str(best_acc[p]))
+                          str(best_params[p]) + " with " + args.metric + " " + str(best_score[p]))
 
         # Rest.
         time.sleep(10)
@@ -117,4 +120,6 @@ if __name__ == "__main__":
                         help="the total number of models to try")
     parser.add_argument('--num_jobs', type=int, required=True,
                         help="the total of jobs to run in parallel")
+    parser.add_argument('--metric', type=str, required=True,
+                        help="either 'acc' or 'f1'")
     main(parser.parse_args())

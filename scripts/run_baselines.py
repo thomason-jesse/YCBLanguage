@@ -17,9 +17,31 @@ from torchvision.transforms import ToTensor
 from torchvision.transforms.functional import resize
 
 
-# Get accuracy from a confusion matrix.
+# Get accuracy from a confusion matrix with an arbitrary number of classes.
 def get_acc(cm):
     return np.trace(cm) / np.sum(cm)
+
+
+# Get f1 from a confusion matrix, averaging the "real" classes' f1 scores and ignoring the "maybe" class f1.
+# cm - a 3x3 confusion matrix with class 1 representing "maybe"/"undecided"
+def get_f1(cm):
+    if cm.shape != (3, 3):
+        return None
+    tp = cm[0, 0] + cm[2, 2]
+
+    fp0 = np.sum(cm[:, 0]) - cm[0, 0]
+    fn0 = np.sum(cm[0, :]) - cm[0, 0]
+    p0 = tp / (tp + fp0)
+    r0 = tp / (tp + fn0)
+    f0 = (2 * p0 * r0) / (p0 + r0)
+
+    fp2 = np.sum(cm[:, 2]) - cm[2, 2]
+    fn2 = np.sum(cm[2, :]) - cm[2, 2]
+    p2 = tp / (tp + fp2)
+    r2 = tp / (tp + fn2)
+    f2 = (2 * p2 * r2) / (p2 + r2)
+
+    return (f0 + f2) / 2
 
 
 # Count the majority class label in the train set and use it as a classification decision on every instance
@@ -287,6 +309,7 @@ def make_lang_structures(tr_f, te_f, inc_test=False):
 # ws - the set of words to look up.
 def get_glove_vectors(fn, ws):
     g = {}
+    unk_v = None
     with open(fn, 'r') as f:
         lines = f.readlines()
         for line in lines:
@@ -295,12 +318,13 @@ def get_glove_vectors(fn, ws):
             if w in ws:
                 v = np.array([float(n) for n in p[1:]])
                 g[w] = v
+            if w == "unk":
+                unk_v = np.array([float(n) for n in p[1:]])
     m = 0
     for w in ws:
         if w not in g:
             m += 1
-            v = np.zeros(len(g[list(g.keys())[0]]))
-            g[w] = v
+            g[w] = unk_v
     assert set(g.keys()) == ws
     return g, m
 
@@ -333,7 +357,8 @@ def run_ff_model(wv, tr_f, tr_l, te_f, te_l,
     assert batch_size is not None or epochs is not None
 
     # Prepare the data.
-    print("FF: preparing training and testing data...")
+    if verbose:
+        print("FF: preparing training and testing data...")
     tr_inputs = []
     te_inputs = []
     classes = []
@@ -350,20 +375,22 @@ def run_ff_model(wv, tr_f, tr_l, te_f, te_l,
                 avg_ob2_v = np.sum([v[w] for w in ob2_ws], axis=0) / len(ob2_ws)
                 incat = np.concatenate((avg_ob1_v, avg_ob2_v))
                 cat_v = np.concatenate((cat_v, incat))
-            model_in.append(torch.tensor(cat_v, dtype=torch.float))
+            model_in.append(torch.tensor(cat_v, dtype=torch.float).to(device))
             inwidth = len(model_in[-1])
             if orig_out[idx] not in classes:
                 classes.append(orig_out[idx])
     outwidth = len(classes)
-    tr_outputs = torch.tensor(tr_l, dtype=torch.long).view(len(tr_l), 1)
+    tr_outputs = torch.tensor(tr_l, dtype=torch.long).to(device).view(len(tr_l), 1)
     if epochs is None:  # iterate given the batch size to cover all data at least once
         epochs = int(np.ceil(len(tr_inputs) / float(batch_size)))
     if batch_size is None:
         batch_size = len(tr_inputs)
-    print("FF: ... done")
+    if verbose:
+        print("FF: ... done")
 
     # Construct the model with specified number of hidden layers / dimensions (or none) and relu activations between.
-    print("FF: constructing model...")
+    if verbose:
+        print("FF: constructing model...")
     if layers is not None:
         lr = [nn.Linear(inwidth, layers[0])]
         for idx in range(1, len(layers)):
@@ -375,8 +402,9 @@ def run_ff_model(wv, tr_f, tr_l, te_f, te_l,
         lr.append(nn.Linear(layers[-1], outwidth))
     else:
         lr = [nn.Linear(inwidth, outwidth)]
-    model = nn.Sequential(*lr)
-    print("FF: ... done")
+    model = nn.Sequential(*lr).to(device)
+    if verbose:
+        print("FF: ... done")
 
     # Train: train a neural model for a fixed number of epochs.
     if verbose:
@@ -433,15 +461,16 @@ def run_ff_model(wv, tr_f, tr_l, te_f, te_l,
                 tr_acc_at_best = tr_acc
                 trcm_at_best = trcm
 
-        print("... epoch " + str(epoch) + " train loss " + str(tloss) + "; train accuracy " + str(tr_acc) +
-              "; test accuracy " + str(acc))
+        if verbose:
+            print("... epoch " + str(epoch) + " train loss " + str(tloss) + "; train accuracy " + str(tr_acc) +
+                  "; test accuracy " + str(acc))
     if verbose:
         print("FF: ... done")
 
     return best_acc, best_cm, tr_acc_at_best, trcm_at_best
 
 
-def main(args):
+def main(args, device):
     assert args.baseline is None or args.baseline in ['majority', 'nb_names', 'nb_bow',
                                                       'lstm', 'glove', 'nn_bow', 'resnet', 'glove+resnet']
     assert args.glove_infile is not None or (args.baseline is not None and args.baseline != 'glove')
@@ -701,14 +730,15 @@ def main(args):
     for idx in range(len(bs)):
         print(" " + bs[idx] + ":")
         for p in preps:
-            print("  " + p + ":\t%0.3f" % rs[idx][p][0] + "\t(train: %0.3f" % rs[idx][p][2] + ")")
+            print("  " + p + ":\tacc %0.3f" % rs[idx][p][0] + "\t(train: %0.3f" % rs[idx][p][2] + ")")
+            print("  \tf1  %0.3f" % get_f1(rs[idx][p][1]) + "\t(train: %0.3f" % get_f1(rs[idx][p][3]) + ")")
             print('\t(CM\t' + '\n\t\t'.join(['\t'.join([str(int(ct)) for ct in rs[idx][p][1][i]])
                                              for i in range(len(rs[idx][p][1]))]) + ")")
 
     # Write val accuracy results.
     if args.perf_outfile is not None:
         with open(args.perf_outfile, 'w') as f:
-            json.dump([{p: rs[idx][p][0] for p in preps} for idx in range(len(rs))], f)
+            json.dump([{p: [rs[idx][p][0], get_f1(rs[idx][p][1])] for p in preps} for idx in range(len(rs))], f)
 
 
 # TODO: ResNet-class models (instead of penultimate layer) for alone and w GLoVe.
@@ -732,4 +762,5 @@ if __name__ == "__main__":
                         help="1 if desired")
     parser.add_argument('--ff_epochs', type=int, required=False,
                         help="override default number of epochs")
-    main(parser.parse_args())
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    main(parser.parse_args(), device)
