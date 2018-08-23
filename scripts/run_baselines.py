@@ -27,21 +27,11 @@ def get_acc(cm):
 def get_f1(cm):
     if cm.shape != (3, 3):
         return None
-    tp = cm[0, 0] + cm[2, 2]
-
-    fp0 = np.sum(cm[:, 0]) - cm[0, 0]
-    fn0 = np.sum(cm[0, :]) - cm[0, 0]
-    p0 = tp / (tp + fp0)
-    r0 = tp / (tp + fn0)
-    f0 = (2 * p0 * r0) / (p0 + r0)
-
-    fp2 = np.sum(cm[:, 2]) - cm[2, 2]
-    fn2 = np.sum(cm[2, :]) - cm[2, 2]
-    p2 = tp / (tp + fp2)
-    r2 = tp / (tp + fn2)
-    f2 = (2 * p2 * r2) / (p2 + r2)
-
-    return (f0 + f2) / 2
+    tp = cm[0, 0] + cm[2, 2]  # true positives for Y/N labels
+    p = tp / (np.sum(cm[:, 0] + np.sum(cm[:, 2])))  # precision when we decided to say Y or N
+    r = tp / (np.sum(cm[0, :] + np.sum(cm[2, :])))  # recall when the true label was Y or N
+    f = (2 * p * r) / (p + r)  # harmonic mean of Y/N-based precision and recall
+    return f
 
 
 # Count the majority class label in the train set and use it as a classification decision on every instance
@@ -350,7 +340,7 @@ def get_bow_vectors(ws):
 # layers - a list of hidden widths for a FF network or None to create a linear perceptron
 # verbose - whether to print epoch-wise progress
 # Reference: https://github.com/jcjohnson/pytorch-examples/blob/master/nn/two_layer_net_nn.py
-def run_ff_model(wv, tr_f, tr_l, te_f, te_l,
+def run_ff_model(dv, wv, tr_f, tr_l, te_f, te_l,
                  layers=None, batch_size=None, epochs=None,
                  dropout=0, learning_rate=0.001, opt='sgd',
                  verbose=False):
@@ -375,12 +365,12 @@ def run_ff_model(wv, tr_f, tr_l, te_f, te_l,
                 avg_ob2_v = np.sum([v[w] for w in ob2_ws], axis=0) / len(ob2_ws)
                 incat = np.concatenate((avg_ob1_v, avg_ob2_v))
                 cat_v = np.concatenate((cat_v, incat))
-            model_in.append(torch.tensor(cat_v, dtype=torch.float).to(device))
+            model_in.append(torch.tensor(cat_v, dtype=torch.float).to(dv))
             inwidth = len(model_in[-1])
             if orig_out[idx] not in classes:
                 classes.append(orig_out[idx])
     outwidth = len(classes)
-    tr_outputs = torch.tensor(tr_l, dtype=torch.long).to(device).view(len(tr_l), 1)
+    tr_outputs = torch.tensor(tr_l, dtype=torch.long).to(dv).view(len(tr_l), 1)
     if epochs is None:  # iterate given the batch size to cover all data at least once
         epochs = int(np.ceil(len(tr_inputs) / float(batch_size)))
     if batch_size is None:
@@ -402,7 +392,7 @@ def run_ff_model(wv, tr_f, tr_l, te_f, te_l,
         lr.append(nn.Linear(layers[-1], outwidth))
     else:
         lr = [nn.Linear(inwidth, outwidth)]
-    model = nn.Sequential(*lr).to(device)
+    model = nn.Sequential(*lr).to(dv)
     if verbose:
         print("FF: ... done")
 
@@ -470,11 +460,14 @@ def run_ff_model(wv, tr_f, tr_l, te_f, te_l,
     return best_acc, best_cm, tr_acc_at_best, trcm_at_best
 
 
-def main(args, device):
+def main(args, dv):
     assert args.baseline is None or args.baseline in ['majority', 'nb_names', 'nb_bow',
                                                       'lstm', 'glove', 'nn_bow', 'resnet', 'glove+resnet']
     assert args.glove_infile is not None or (args.baseline is not None and args.baseline != 'glove')
     verbose = True if args.verbose == 1 else False
+    test_run = True if args.test == 1 else False
+    assert (not test_run or args.baseline not in ['glove', 'nn_bow', 'resnet', 'glove+resnet']
+            or args.hyperparam_infile is not None)
 
     # Read in labeled folds.
     print("Reading in labeled folds from '" + args.infile + "'...")
@@ -483,9 +476,18 @@ def main(args, device):
         names = all_d["names"]
         lf = all_d["folds"]
         train = lf['train']
-        test = lf['dev']  # only ever peak at the dev set.
         preps = train.keys()
+        if test_run:
+            test = lf['test']
+            dev_aug = lf['dev']
+            for p in preps:
+                for k in dev_aug[p].keys():
+                    train[p][k].extend(dev_aug[p][k])
+        else:
+            test = lf['dev']  # only ever peak at the dev set.
     print("... done")
+    if args.task is not None:
+        preps = [args.task]
 
     # Read in metadata.
     print("Reading in metadata from '" + args.metadata_infile + "'...")
@@ -606,6 +608,8 @@ def main(args, device):
         ff_dropout = 0
         ff_lr = 0.001
         ff_opt = 'sgd'
+    ff_random_restarts = None if args.ff_random_restarts is None else \
+        [int(s) for s in args.ff_random_restarts.split(',')]
 
     # Average GLoVe embeddings concatenated and used to predict class.
     g = None
@@ -630,9 +634,19 @@ def main(args, device):
                     range(len(test[p]["ob1"]))]
             layers = None if ff_layers == 0 else [int(emb_dim_l / np.power(ff_width_decay, lidx) + 0.5)
                                                   for lidx in range(ff_layers)]
-            rs[-1][p] = run_ff_model([g], [tr_f], train[p]["label"], [te_f], test[p]["label"],
-                                     layers=layers, epochs=ff_epochs, dropout=ff_dropout,
-                                     learning_rate=ff_lr, opt=ff_opt, verbose=verbose)
+            if ff_random_restarts is None:
+                rs[-1][p] = run_ff_model(dv, [g], [tr_f], train[p]["label"], [te_f], test[p]["label"],
+                                         layers=layers, epochs=ff_epochs, dropout=ff_dropout,
+                                         learning_rate=ff_lr, opt=ff_opt, verbose=verbose)
+            else:
+                rs[-1][p] = []
+                for seed in ff_random_restarts:
+                    print("... with seed " + str(seed) + "...")
+                    np.random.seed(seed)
+                    torch.manual_seed(seed)
+                    rs[-1][p].append(run_ff_model(dv, [g], [tr_f], train[p]["label"], [te_f], test[p]["label"],
+                                                  layers=layers, epochs=ff_epochs, dropout=ff_dropout,
+                                                  learning_rate=ff_lr, opt=ff_opt, verbose=verbose))
 
     # Average BoW embeddings use to predict class.
     if args.baseline is None or args.baseline == 'nn_bow':
@@ -654,9 +668,19 @@ def main(args, device):
                     range(len(test[p]["ob1"]))]
             layers = None if ff_layers == 0 else [int(emb_dim / np.power(ff_width_decay, lidx) + 0.5)
                                                   for lidx in range(ff_layers)]
-            rs[-1][p] = run_ff_model([wv], [tr_f], train[p]["label"], [te_f], test[p]["label"],
-                                     layers=layers, epochs=ff_epochs, dropout=ff_dropout,
-                                     learning_rate=ff_lr, opt=ff_opt, verbose=verbose)
+            if ff_random_restarts is None:
+                rs[-1][p] = rs[-1][p] = run_ff_model(dv, [wv], [tr_f], train[p]["label"], [te_f], test[p]["label"],
+                                                     layers=layers, epochs=ff_epochs, dropout=ff_dropout,
+                                                     learning_rate=ff_lr, opt=ff_opt, verbose=verbose)
+            else:
+                rs[-1][p] = []
+                for seed in ff_random_restarts:
+                    print("... with seed " + str(seed) + "...")
+                    np.random.seed(seed)
+                    torch.manual_seed(seed)
+                    rs[-1][p].append(run_ff_model(dv, [wv], [tr_f], train[p]["label"], [te_f], test[p]["label"],
+                                                  layers=layers, epochs=ff_epochs, dropout=ff_dropout,
+                                                  learning_rate=ff_lr, opt=ff_opt, verbose=verbose))
 
     # Average BoW embeddings use to predict class.
     idx_to_v = None
@@ -700,9 +724,20 @@ def main(args, device):
                     range(len(test[p]["ob1"]))]
             layers = None if ff_layers == 0 else [int(emb_dim_v / np.power(ff_width_decay, lidx) + 0.5)
                                                   for lidx in range(ff_layers)]
-            rs[-1][p] = run_ff_model([idx_to_v], [tr_f], train[p]["label"], [te_f], test[p]["label"],
-                                     layers=layers, epochs=ff_epochs, dropout=ff_dropout,
-                                     learning_rate=ff_lr, opt=ff_opt, verbose=verbose)
+            if ff_random_restarts is None:
+                rs[-1][p] = rs[-1][p] = rs[-1][p] = run_ff_model(dv, [idx_to_v], [tr_f], train[p]["label"],
+                                                                 [te_f], test[p]["label"],
+                                                                 layers=layers, epochs=ff_epochs, dropout=ff_dropout,
+                                                                 learning_rate=ff_lr, opt=ff_opt, verbose=verbose)
+            else:
+                rs[-1][p] = []
+                for seed in ff_random_restarts:
+                    print("... with seed " + str(seed) + "...")
+                    np.random.seed(seed)
+                    torch.manual_seed(seed)
+                    rs[-1][p].append(run_ff_model(dv, [idx_to_v], [tr_f], train[p]["label"], [te_f], test[p]["label"],
+                                                  layers=layers, epochs=ff_epochs, dropout=ff_dropout,
+                                                  learning_rate=ff_lr, opt=ff_opt, verbose=verbose))
 
     if args.baseline is None or args.baseline == 'glove+resnet':
         print("Running Glove+ResNet FF models")
@@ -720,25 +755,62 @@ def main(args, device):
                     range(len(test[p]["ob1"]))]
             layers = None if ff_layers == 0 else [int(emb_dim / np.power(ff_width_decay, lidx) + 0.5)
                                                   for lidx in range(ff_layers)]
-            rs[-1][p] = run_ff_model([g, idx_to_v], [tr_f_l, tr_f_v], train[p]["label"],
+            if ff_random_restarts is None:
+                rs[-1][p] = rs[-1][p] = rs[-1][p] = run_ff_model(dv, [g, idx_to_v], [tr_f_l, tr_f_v], train[p]["label"],
+                                                                 [te_f_l, te_f_v], test[p]["label"],
+                                                                 layers=layers, epochs=ff_epochs, dropout=ff_dropout,
+                                                                 learning_rate=ff_lr, opt=ff_opt, verbose=verbose)
+            else:
+                rs[-1][p] = []
+                for seed in ff_random_restarts:
+                    print("... with seed " + str(seed) + "...")
+                    np.random.seed(seed)
+                    torch.manual_seed(seed)
+                    rs[-1][p].append(run_ff_model(dv, [g, idx_to_v], [tr_f_l, tr_f_v], train[p]["label"],
                                      [te_f_l, te_f_v], test[p]["label"],
                                      layers=layers, epochs=ff_epochs, dropout=ff_dropout,
-                                     learning_rate=ff_lr, opt=ff_opt, verbose=verbose)
+                                     learning_rate=ff_lr, opt=ff_opt, verbose=verbose))
 
-    # Show results.
-    print("Results:")
-    for idx in range(len(bs)):
-        print(" " + bs[idx] + ":")
-        for p in preps:
-            print("  " + p + ":\tacc %0.3f" % rs[idx][p][0] + "\t(train: %0.3f" % rs[idx][p][2] + ")")
-            print("  \tf1  %0.3f" % get_f1(rs[idx][p][1]) + "\t(train: %0.3f" % get_f1(rs[idx][p][3]) + ")")
-            print('\t(CM\t' + '\n\t\t'.join(['\t'.join([str(int(ct)) for ct in rs[idx][p][1][i]])
-                                             for i in range(len(rs[idx][p][1]))]) + ")")
+    if ff_random_restarts is None:
+        # Show results.
+        print("Results:")
+        for idx in range(len(bs)):
+            print(" " + bs[idx] + ":")
+            for p in preps:
+                print("  " + p + ":\tacc %0.3f" % rs[idx][p][0] + "\t(train: %0.3f" % rs[idx][p][2] + ")")
+                print("  \tf1  %0.3f" % get_f1(rs[idx][p][1]) + "\t(train: %0.3f" % get_f1(rs[idx][p][3]) + ")")
+                print('\t(CM\t' + '\n\t\t'.join(['\t'.join([str(int(ct)) for ct in rs[idx][p][1][i]])
+                                                 for i in range(len(rs[idx][p][1]))]) + ")")
 
-    # Write val accuracy results.
-    if args.perf_outfile is not None:
-        with open(args.perf_outfile, 'w') as f:
-            json.dump([{p: [rs[idx][p][0], get_f1(rs[idx][p][1])] for p in preps} for idx in range(len(rs))], f)
+        # Write val accuracy results.
+        if args.perf_outfile is not None:
+            print("Writing results to '" + args.perf_outfile + "'...")
+            with open(args.perf_outfile, 'w') as f:
+                json.dump([{p: [rs[idx][p][0], get_f1(rs[idx][p][1])] for p in preps} for idx in range(len(rs))], f)
+            print("... done")
+
+    else:
+        print("Results:")
+        for idx in range(len(bs)):
+            print(" " + bs[idx] + ":")
+            for p in preps:
+                avg_acc = np.average([rs[idx][p][jdx][0] for jdx in range(len(ff_random_restarts))])
+                avg_tr_acc = np.average([rs[idx][p][jdx][2] for jdx in range(len(ff_random_restarts))])
+                avg_f1 = np.average([get_f1(rs[idx][p][jdx][1]) for jdx in range(len(ff_random_restarts))])
+                avg_tr_f1 = np.average([get_f1(rs[idx][p][jdx][3]) for jdx in range(len(ff_random_restarts))])
+                print("  " + p + ":\tacc %0.3f" % avg_acc + "\t(train: %0.3f" % avg_tr_acc + ")")
+                print("  \tf1  %0.3f" % avg_f1 + "\t(train: %0.3f" % avg_tr_f1 + ")")
+
+        # Write out results for all seeds so that a downstream script can process them for stat sig.
+        if args.perf_outfile is not None:
+            print("Writing results to '" + args.perf_outfile + "'...")
+            with open(args.perf_outfile, 'w') as f:
+                json.dump([{p: {"acc": [rs[idx][p][jdx][0] for jdx in range(len(ff_random_restarts))],
+                                "tr_acc": [rs[idx][p][jdx][2] for jdx in range(len(ff_random_restarts))],
+                                "f1": [get_f1(rs[idx][p][jdx][1]) for jdx in range(len(ff_random_restarts))],
+                                "tr_f1": [get_f1(rs[idx][p][jdx][3]) for jdx in range(len(ff_random_restarts))]}
+                            for p in preps} for idx in range(len(rs))], f)
+            print("... done")
 
 
 # TODO: ResNet-class models (instead of penultimate layer) for alone and w GLoVe.
@@ -752,6 +824,8 @@ if __name__ == "__main__":
     parser.add_argument('--baseline', type=str, required=False,
                         help="if None, all will run, else 'majority', 'nb_names', 'nb_bow', 'lstm', 'glove'," +
                              " 'nn_bow', 'resnet', 'glove+resnet'")
+    parser.add_argument('--task', type=str, required=False,
+                        help="the task to perform; if None, will do both 'on' and 'in'")
     parser.add_argument('--glove_infile', type=str, required=False,
                         help="input glove vector text file if running glove baseline")
     parser.add_argument('--hyperparam_infile', type=str, required=False,
@@ -762,5 +836,9 @@ if __name__ == "__main__":
                         help="1 if desired")
     parser.add_argument('--ff_epochs', type=int, required=False,
                         help="override default number of epochs")
+    parser.add_argument('--ff_random_restarts', type=str, required=False,
+                        help="comma-separated list of random seeds to use; presents avg + stddev data instead of cms")
+    parser.add_argument('--test', type=int, required=False,
+                        help="if set to 1, evaluates on the test set; NOT FOR TUNING")
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     main(parser.parse_args(), device)
