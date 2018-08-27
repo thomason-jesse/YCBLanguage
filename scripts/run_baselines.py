@@ -28,9 +28,17 @@ def get_f1(cm):
     if cm.shape != (3, 3):
         return None
     tp = cm[0, 0] + cm[2, 2]  # true positives for Y/N labels
-    p = tp / (np.sum(cm[:, 0] + np.sum(cm[:, 2])))  # precision when we decided to say Y or N
+    decided_y_n = np.sum(cm[:, 0] + np.sum(cm[:, 2]))
+    if decided_y_n > 0:
+        p = tp / decided_y_n  # precision when we decided to say Y or N
+    else:
+        p = 0  # set precision to zero (truly it is "undefined" since we labeled everything "maybe")
+    # We don't need this check for recall, since we know the true labels are not all clustered on "maybe"
     r = tp / (np.sum(cm[0, :] + np.sum(cm[2, :])))  # recall when the true label was Y or N
-    f = (2 * p * r) / (p + r)  # harmonic mean of Y/N-based precision and recall
+    if p + r > 0:  # if tp = 0, this can happen
+        f = (2 * p * r) / (p + r)  # harmonic mean of Y/N-based precision and recall
+    else:
+        f = 0
     return f
 
 
@@ -191,7 +199,7 @@ def run_lang_2_label(maxlen, word_to_i,
     if verbose:
         print("L2L: training on " + str(len(tr_inputs)) + " inputs with batch size " + str(batch_size) + " for " + str(epochs) + " epochs...")
     m = LSTMTagger(width, len(word_to_i), len(classes))
-    loss_function = nn.CrossEntropyLoss(ignore_index = word_to_i['<_>'])
+    loss_function = nn.CrossEntropyLoss(ignore_index=word_to_i['<_>'])
     optimizer = optim.SGD(m.parameters(), lr=0.001)  # TODO: this could be touched up.
     idxs = list(range(len(tr_inputs)))
     np.random.shuffle(idxs)
@@ -209,7 +217,7 @@ def run_lang_2_label(maxlen, word_to_i,
             loss = loss_function(logits, tr_outputs[idx])
             tloss += loss.data.item()
             loss.backward()
-            optimizer.step()
+            optimizer.step()  # this is fun!  these boots were made for walking, and that's just what they'll do
             c += 1
             idx += 1
             if idx == len(tr_inputs):
@@ -746,13 +754,13 @@ def main(args, dv):
         emb_dim = emb_dim_l + emb_dim_v
         for p in preps:
             tr_f_l = [[res[train[p][s][idx]] for s in ["ob1", "ob2"]] for idx in
-                    range(len(train[p]["ob1"]))]
+                      range(len(train[p]["ob1"]))]
             te_f_l = [[res[test[p][s][idx]] for s in ["ob1", "ob2"]] for idx in
-                    range(len(test[p]["ob1"]))]
+                      range(len(test[p]["ob1"]))]
             tr_f_v = [[[[train[p][s][idx]]] for s in ["ob1", "ob2"]] for idx in
-                    range(len(train[p]["ob1"]))]
+                      range(len(train[p]["ob1"]))]
             te_f_v = [[[[test[p][s][idx]]] for s in ["ob1", "ob2"]] for idx in
-                    range(len(test[p]["ob1"]))]
+                      range(len(test[p]["ob1"]))]
             layers = None if ff_layers == 0 else [int(emb_dim / np.power(ff_width_decay, lidx) + 0.5)
                                                   for lidx in range(ff_layers)]
             if ff_random_restarts is None:

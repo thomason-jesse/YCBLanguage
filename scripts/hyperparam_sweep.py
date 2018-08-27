@@ -34,12 +34,11 @@ def main(args):
             jidx = free_job_slots.pop()
 
             # New hyperparamters for this job.
-            d = {}
-            d['layers'] = np.random.randint(0, 4)  # 0 - 3 layers
-            d['width_decay'] = 3 + np.random.rand() * 2  # 3 - 5 width decay rate
-            d['dropout'] = np.random.rand() * 0.5  # in [0, 0.5]
-            d['lr'] = np.power(10, (-1 - np.random.rand() * 3))  # 0.1 to 0.0001
-            d['opt'] = np.random.choice(['adagrad', 'adam', 'rmsprop', 'sgd'])
+            d = {'layers':      np.random.randint(0, 4),  # 0 - 3 layers
+                 'width_decay': 3 + np.random.rand() * 2,  # 3 - 5 width decay rate
+                 'dropout':     np.random.rand() * 0.5,  # in [0, 0.5]
+                 'lr':          np.power(10, (-1 - np.random.rand() * 3)),  # 0.1 to 0.0001
+                 'opt':         np.random.choice(['adagrad', 'adam', 'rmsprop', 'sgd'])}
 
             # Write hyperparam file.
             fn = args.hyperparam_outfile_prefix + "." + str(jidx)
@@ -56,7 +55,7 @@ def main(args):
                    " --hyperparam_infile " + fn +
                    " --perf_outfile " + fn_out)
             if ff_random_restarts is not None:
-                   cmd += " --ff_random_restarts " + args.ff_random_restarts
+                cmd += " --ff_random_restarts " + args.ff_random_restarts
             p = subprocess.Popen(cmd.split(' '), stdin=null, stdout=null)
             curr_jobs[jidx] = p
             print("... launched a new model")
