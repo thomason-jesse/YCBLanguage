@@ -12,11 +12,18 @@ from scipy.stats import ttest_ind
 def main(args):
 
     preps = ["on", "in"]
+<<<<<<< HEAD
     models = ["bow", "glove", "resnet", "mmS"]
     models_baseline_names = ["nn_bow", "glove", "resnet", "glove+resnetS"]
     metric = "acc"
     folds = ["train", "dev", "test"]
     test_accs = {p: [None for midx in range(len(models))] for p in preps}
+=======
+    models = ["bow", "glove", "resnet", "mm"]
+    models_baseline_names = ["nn_bow", "glove", "resnet", "glove+resnet"]
+    metric = "acc"
+    folds = ["train", "dev", "test"]
+>>>>>>> b45f75e50f56c5f4cbc18f51edf59e9f5042a889
     for p in preps:
 
         # From results directory, check whether test set performance is missing and run those models if so.
@@ -108,6 +115,7 @@ def main(args):
                 if sig[midx]:
                     print("\t\tmodel '" + models[midx] + "' differs from others with p < " + str(pvt))
 
+<<<<<<< HEAD
         for midx in range(len(models)):
             test_accs[p][midx] = results["test"][midx]
 
@@ -119,6 +127,8 @@ def main(args):
                  for idx in range(len(test_accs["on"][midx]))]
         print("\t\t" + models[midx] + "\t%0.3f" % np.average(means) + " +/- %0.3f" % np.std(means))
 
+=======
+>>>>>>> b45f75e50f56c5f4cbc18f51edf59e9f5042a889
 
 if __name__ == "__main__":
 

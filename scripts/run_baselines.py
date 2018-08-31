@@ -55,6 +55,7 @@ def main(args, dv):
             test = lf['dev']  # only ever peak at the dev set.
             if robodata is not None:
                 robo_test = robodata['dev']
+
     print("... done")
     if args.task is not None:
         preps = [args.task]
@@ -179,6 +180,7 @@ def main(args, dv):
         ff_dropout = 0
         ff_lr = 0.001
         ff_opt = 'adagrad'
+
     ff_random_restarts = None if args.ff_random_restarts is None else \
         [int(s) for s in args.ff_random_restarts.split(',')]
 
