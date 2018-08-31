@@ -21,6 +21,8 @@ def main(args):
     score_idx = 0 if args.metric == 'acc' else 1
     total_models_finished = 0
     curr_jobs = {jidx: None for jidx in range(args.num_jobs)}
+    ff_random_restarts = None if args.ff_random_restarts is None else \
+        [int(s) for s in args.ff_random_restarts.split(',')]
     print("spinning until all " + str(args.num_models) + " models have been run...")
     null = open('/dev/null', 'w')
     while total_models_finished < args.num_models:
@@ -32,12 +34,11 @@ def main(args):
             jidx = free_job_slots.pop()
 
             # New hyperparamters for this job.
-            d = {}
-            d['layers'] = np.random.randint(0, 4)  # 0 - 3 layers
-            d['width_decay'] = 3 + np.random.rand() * 2  # 3 - 5 width decay rate
-            d['dropout'] = np.random.rand() * 0.5  # in [0, 0.5]
-            d['lr'] = np.power(10, (-1 - np.random.rand() * 3))  # 0.1 to 0.0001
-            d['opt'] = np.random.choice(['adagrad', 'adam', 'rmsprop', 'sgd'])
+            d = {'layers':      np.random.randint(0, 4),  # 0 - 3 layers
+                 'width_decay': 3 + np.random.rand() * 2,  # 3 - 5 width decay rate
+                 'dropout':     np.random.rand() * 0.5,  # in [0, 0.5]
+                 'lr':          np.power(10, (-1 - np.random.rand() * 3)),  # 0.1 to 0.0001
+                 'opt':         np.random.choice(['adagrad', 'adam', 'rmsprop', 'sgd'])}
 
             # Write hyperparam file.
             fn = args.hyperparam_outfile_prefix + "." + str(jidx)
@@ -53,6 +54,8 @@ def main(args):
                    " --glove_infile " + args.glove_infile +
                    " --hyperparam_infile " + fn +
                    " --perf_outfile " + fn_out)
+            if ff_random_restarts is not None:
+                cmd += " --ff_random_restarts " + args.ff_random_restarts
             p = subprocess.Popen(cmd.split(' '), stdin=null, stdout=null)
             curr_jobs[jidx] = p
             print("... launched a new model")
@@ -70,13 +73,19 @@ def main(args):
                         with open(fn_out, 'r') as f:
                             d = json.load(f)[0]  # only ran one model, so take it out of the list results
                             for p in preps:
-                                if d[p][score_idx] > best_score[p]:  # val accuracy or f1
-                                    best_score[p] = d[p][score_idx]
+                                if ff_random_restarts is None:
+                                    model_score = d[p][score_idx]
+                                else:
+                                    model_score = np.average(d[p][args.metric])
+                                if model_score > best_score[p]:  # val accuracy or f1
+                                    best_score[p] = model_score
                                     with open(fn, 'r') as fhp:
                                         hp = json.load(fhp)
                                         best_params[p] = hp
                                     best_changed[p] = True
                                     os.system("cp " + fn + " " + args.hyperparam_outfile_prefix + "." + p + "." +
+                                              args.metric + ".best")
+                                    os.system("cp " + fn_out + " " + args.results_outfile_prefix + "." + p + "." +
                                               args.metric + ".best")
                             os.system("rm " + fn)
                         os.system("rm " + fn_out)
@@ -111,15 +120,19 @@ if __name__ == "__main__":
                         help="input json file with object metadata")
     parser.add_argument('--baseline', type=str, required=True,
                         help="if None, all will run, else 'majority', 'nb_names', 'nb_bow', 'lstm', 'glove'," +
-                             " 'nn_bow', 'resnet', 'glove+resnet'")
+                             " 'nn_bow', 'resnet', 'glove+resnet', 'glove+resnetS'")
     parser.add_argument('--glove_infile', type=str, required=True,
                         help="input glove vector text file if running glove baseline")
+    parser.add_argument('--results_outfile_prefix', type=str, required=True,
+                        help="output json filename prefix for best parameter results")
     parser.add_argument('--hyperparam_outfile_prefix', type=str, required=True,
-                        help="output json filename prefix for model hyperparameters")
+                        help="output json filename prefix for best model hyperparameters")
     parser.add_argument('--num_models', type=int, required=True,
                         help="the total number of models to try")
     parser.add_argument('--num_jobs', type=int, required=True,
                         help="the total of jobs to run in parallel")
     parser.add_argument('--metric', type=str, required=True,
                         help="either 'acc' or 'f1'")
+    parser.add_argument('--ff_random_restarts', type=str, required=False,
+                        help="comma-separated list of random seeds to use; otherwise single model eval")
     main(parser.parse_args())

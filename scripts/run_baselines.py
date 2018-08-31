@@ -4,488 +4,60 @@ __author__ = 'thomason-jesse'
 
 import argparse
 import json
-import numpy as np
 import os
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-import torch.optim as optim
-from functools import reduce
 from PIL import Image
+from models import *
+from sklearn.naive_bayes import GaussianNB
 from torchvision.models import resnet
 from torchvision.transforms import ToTensor
 from torchvision.transforms.functional import resize
+from utils import *
 
 
-# Get accuracy from a confusion matrix with an arbitrary number of classes.
-def get_acc(cm):
-    return np.trace(cm) / np.sum(cm)
-
-
-# Get f1 from a confusion matrix, averaging the "real" classes' f1 scores and ignoring the "maybe" class f1.
-# cm - a 3x3 confusion matrix with class 1 representing "maybe"/"undecided"
-def get_f1(cm):
-    if cm.shape != (3, 3):
-        return None
-    tp = cm[0, 0] + cm[2, 2]
-
-    fp0 = np.sum(cm[:, 0]) - cm[0, 0]
-    fn0 = np.sum(cm[0, :]) - cm[0, 0]
-    p0 = tp / (tp + fp0)
-    r0 = tp / (tp + fn0)
-    f0 = (2 * p0 * r0) / (p0 + r0)
-
-    fp2 = np.sum(cm[:, 2]) - cm[2, 2]
-    fn2 = np.sum(cm[2, :]) - cm[2, 2]
-    p2 = tp / (tp + fp2)
-    r2 = tp / (tp + fn2)
-    f2 = (2 * p2 * r2) / (p2 + r2)
-
-    return (f0 + f2) / 2
-
-
-# Count the majority class label in the train set and use it as a classification decision on every instance
-# in the test set.
-# tr_l - training labels
-# te_l - testing labels
-def run_majority_class(tr_l, te_l):
-
-    # Train: count the majority class across all labels.
-    cl = {}
-    for l in tr_l:
-        if l not in cl:
-            cl[l] = 0
-        cl[l] += 1
-    mc = sorted(cl, key=cl.get, reverse=True)[0]
-
-    # Test: for every instance, guess the majority class.
-    cm = np.zeros(shape=(len(cl), len(cl)))
-    trcm = np.zeros(shape=(len(cl), len(cl)))
-    for labels, conmat in [[te_l, cm], [tr_l, trcm]]:
-        for l in labels:
-            conmat[l][mc] += 1
-
-    # Return accuracy and cm.
-    return get_acc(cm), cm, get_acc(trcm), trcm
-
-
-# A naive bayes implementation that assumes known categorical feature values.
-# fs - feature shape, list of size |F| with entries the range of categorical values per feature.
-# tr_f - training features
-# tr_l - training labels
-# te_f - testing features
-# te_l - testing labels
-def run_cat_naive_bayes(fs, tr_f, tr_l, te_f, te_l,
-                        verbose=False, smooth=0):
-
-    # Train: calculate the prior per class and the conditional likelihood of each feature given the class.
-    if verbose:
-        print("NB: training on " + str(len(tr_f)) + " inputs...")
-    cf = {}  # class frequency
-    ff_c = {}  # categorical feature frequency given class
-    for idx in range(len(tr_f)):
-        c = tr_l[idx]
-        x = tr_f[idx]
-        if c not in cf:
-            cf[c] = smooth
-            ff_c[c] = [{cat: smooth for cat in fs[jdx]} for jdx in range(len(x))]
-        cf[c] += 1
-        for jdx in range(len(x)):
-            ff_c[c][jdx][x[jdx]] += 1
-    cp = {c: cf[c] / float(len(tr_f)) for c in cf}  # class prior
-    fp_c = {c: [{cat: ff_c[c][jdx][cat] / float(cf[c]) for cat in fs[jdx]} for jdx in range(len(tr_f[0]))]
-            for c in ff_c}  # categorical feature probability given class
-    if verbose:
-        print("NB: ... done")
-
-    # Test: calculate the joint likelihood of each class for each instance conditioned on its features.
-    if verbose:
-        print("NB: testing on " + str(len(te_f)) + " outputs...")
-    cm = np.zeros(shape=(len(cp), len(cp)))
-    trcm = np.zeros(shape=(len(cp), len(cp)))
-    for feats, labels, conmat in [[te_f, te_l, cm], [tr_f, tr_l, trcm]]:
-        for idx in range(len(feats)):
-            tc = labels[idx]
-            x = feats[idx]
-            y_probs = [np.log(cp[c]) + reduce(lambda _x, _y: _x + _y, [np.log(fp_c[c][jdx][x[jdx]])
-                                                                       for jdx in range(len(x))])
-                       for c in cf]
-            conmat[tc][y_probs.index(max(y_probs))] += 1
-    if verbose:
-        print("NB: ... done")
-
-    # Return accuracy and cm.
-    return get_acc(cm), cm, get_acc(trcm), trcm
-
-
-# Based on:
-# https://pytorch.org/tutorials/beginner/nlp/sequence_models_tutorial.html
-class LSTMTagger(nn.Module):
-
-    def __init__(self, width, vocab_size, num_classes):
-        super(LSTMTagger, self).__init__()
-        self.width = width
-        self.vocab_size = vocab_size
-        self.num_classes = num_classes
-
-        self.word_embeddings = nn.Embedding(vocab_size, width)
-        self.lstm_src = nn.LSTM(width, width)
-        self.lstm_des = nn.LSTM(width, width)
-        self.hidden2class = nn.Linear(width*2, num_classes)
-
-        self.hidden_src = self.init_hidden()
-        self.hidden_des = self.init_hidden()
-
-    def init_hidden(self):
-        return (torch.zeros(1, 1, self.width),
-                torch.zeros(1, 1, self.width))
-
-    def forward(self, res):
-        embeds_src = self.word_embeddings(res[0])
-        embeds_des = self.word_embeddings(res[0])
-        lstm_src_out, self.hidden_src = self.lstm_src(embeds_src.view(len(res[0]), 1, -1), self.hidden_src)
-        lstm_des_out, self.hidden_des = self.lstm_des(embeds_des.view(len(res[0]), 1, -1), self.hidden_des)
-        hcat = torch.cat((lstm_src_out, lstm_des_out), 0)
-        final_logits = self.hidden2class(hcat.view(len(res[0]), -1))[-1, :]
-        final_logits = final_logits.view(1, len(final_logits))
-        final_scores = F.softmax(final_logits, dim=1)
-        return final_scores, final_logits
-
-
-# Train an LSTM language encoder to predict the category label given language descriptions.
-# tr_f - lists of descriptions for training instances
-# tr_l - training labels
-# te_f - lists of descriptions for testing instances
-# te_l - testing labels
-# verbose - whether to print epoch-wise progress
-# epochs - number of epochs to train
-# width - width of the encoder LSTM
-# batch_size - number of training examples to run before gradient update
-# epochs - number of epochs to run over data; if None, runs over all data once
-def run_lang_2_label(maxlen, word_to_i,
-                     tr_enc_exps, tr_l, te_enc_exps, te_l,
-                     verbose=False, width=16, batch_size=100, epochs=None):
-
-    # Train on the cross product of every description of source and description of destination object.
-    if verbose:
-        print("L2L: preparing training and testing data...")
-    classes = []
-    tr_inputs = []
-    tr_outputs = []
-    p = nn.ConstantPad1d((0, maxlen), word_to_i["<_>"])
-    for idx in range(len(tr_enc_exps)):
-        for ridx in range(len(tr_enc_exps[idx][0])):
-            for rjdx in range(len(tr_enc_exps[idx][1])):
-                tr_inputs.append([p(torch.tensor(tr_enc_exps[idx][0][ridx], dtype=torch.long)),
-                                  p(torch.tensor(tr_enc_exps[idx][1][rjdx], dtype=torch.long))])
-                tr_outputs.append(tr_l[idx])
-                if tr_l[idx] not in classes:
-                    classes.append(tr_l[idx])
-    tr_outputs = torch.tensor(tr_outputs, dtype=torch.long).view(len(tr_outputs), 1)
-    if epochs is None:  # iterate given the batch size to cover all data at least once
-        epochs = int(np.ceil(len(tr_inputs) / float(batch_size)))
-
-    # At test time, run the model on the cross product of descriptions for the pair and sum logits.
-    te_inputs = []
-    for idx in range(len(te_enc_exps)):
-        pairs_in = []
-        for ridx in range(len(te_enc_exps[idx][0])):
-            for rjdx in range(len(te_enc_exps[idx][1])):
-                pairs_in.append([p(torch.tensor(te_enc_exps[idx][0][ridx], dtype=torch.long)),
-                                 p(torch.tensor(te_enc_exps[idx][1][rjdx], dtype=torch.long))])
-        te_inputs.append(pairs_in)
-    if verbose:
-        print("L2L: ... done")
-
-    # Train: train a neural model for a fixed number of epochs.
-    if verbose:
-        print("L2L: training on " + str(len(tr_inputs)) + " inputs with batch size " + str(batch_size) + " for " + str(epochs) + " epochs...")
-    m = LSTMTagger(width, len(word_to_i), len(classes))
-    loss_function = nn.CrossEntropyLoss(ignore_index = word_to_i['<_>'])
-    optimizer = optim.SGD(m.parameters(), lr=0.001)  # TODO: this could be touched up.
-    idxs = list(range(len(tr_inputs)))
-    np.random.shuffle(idxs)
-    tr_inputs = [tr_inputs[idx] for idx in idxs]
-    tr_outputs = tr_outputs[idxs, :]
-    idx = 0
-    for epoch in range(epochs):
-        tloss = 0
-        c = 0
-        while c < batch_size:
-            m.zero_grad()
-            m.hidden_src = m.init_hidden()
-            m.hidden_des = m.init_hidden()
-            _, logits = m(tr_inputs[idx])
-            loss = loss_function(logits, tr_outputs[idx])
-            tloss += loss.data.item()
-            loss.backward()
-            optimizer.step()
-            c += 1
-            idx += 1
-            if idx == len(tr_inputs):
-                idx = 0
-        tloss /= batch_size
-        print("... epoch " + str(epoch) + " train loss " + str(tloss))
-    if verbose:
-        print("L2L: ... done")
-
-    # Test: report accuracy after training.
-    if verbose:
-        print("L2L: calculating test-time accuracy...")
-    with torch.no_grad():
-        cm = np.zeros(shape=(len(classes), len(classes)))
-        trcm = np.zeros(shape=(len(classes), len(classes)))
-        for feats, labels, conmat in [[te_inputs, te_l, cm], [tr_inputs, tr_l, trcm]]:
-            for jdx in range(len(feats)):
-                slogits = torch.zeros(1, len(classes))
-                for vidx in range(len(feats[jdx])):
-                    _, logits = m(feats[jdx][vidx])
-                    slogits += logits
-                pc = slogits.max(1)[1]
-                conmat[labels[jdx]][pc] += 1
-    if verbose:
-        print("L2L: ... done")
-
-    # Return accuracy and cm.
-    return get_acc(cm), cm, get_acc(trcm), trcm
-
-
-# Make the language structures needed for other models.
-# tr_f - referring expression structure for training
-# te_f - referring expresison structure for testing
-# inc_test - whether to 'see' test words unseen during training (UNK when false)
-def make_lang_structures(tr_f, te_f, inc_test=False):
-    word_to_i = {"<?>": 0, "<s>": 1, "<e>": 2, "<_>": 4}
-    i_to_word = {0: "<?>", 1: "<s>", 2: "<e>", 3: "<_>"}
-    maxlen = 0
-    tr_enc_exps = []
-    for idx in range(len(tr_f)):
-        pair_re_is = []
-        for oidx in range(2):
-            ob_re_is = []
-            for re in tr_f[idx][oidx]:
-                re_is = [word_to_i["<s>"]]
-                for w in re:
-                    if w not in word_to_i:
-                        i = len(i_to_word)
-                        word_to_i[w] = i
-                        i_to_word[i] = w
-                    re_is.append(word_to_i[w])
-                re_is.append(word_to_i["<e>"])
-                maxlen = max(maxlen, len(re_is))
-                ob_re_is.append(re_is)
-            pair_re_is.append(ob_re_is)
-        tr_enc_exps.append(pair_re_is)
-
-    te_enc_exps = []
-    for idx in range(len(te_f)):
-        pair_re_is = []
-        for oidx in range(2):
-            ob_re_is = []
-            for re in te_f[idx][oidx]:
-                re_is = [word_to_i["<s>"]]
-                for w in re:
-                    if w not in word_to_i:
-                        if inc_test:
-                            i = len(i_to_word)
-                            word_to_i[w] = i
-                            i_to_word[i] = w
-                        else:
-                            i = word_to_i["<?>"]
-                    else:
-                        i = word_to_i[w]
-                    re_is.append(i)
-                re_is.append(word_to_i["<e>"])
-                maxlen = max(maxlen, len(re_is))
-                ob_re_is.append(re_is)
-            pair_re_is.append(ob_re_is)
-        te_enc_exps.append(pair_re_is)
-
-    return word_to_i, i_to_word, maxlen, tr_enc_exps, te_enc_exps
-
-
-# Get GLoVe vectors from target input file for given vocabulary.
-# fn - the filename where the GLoVe vectors live.
-# ws - the set of words to look up.
-def get_glove_vectors(fn, ws):
-    g = {}
-    unk_v = None
-    with open(fn, 'r') as f:
-        lines = f.readlines()
-        for line in lines:
-            p = line.strip().split(' ')
-            w = p[0]
-            if w in ws:
-                v = np.array([float(n) for n in p[1:]])
-                g[w] = v
-            if w == "unk":
-                unk_v = np.array([float(n) for n in p[1:]])
-    m = 0
-    for w in ws:
-        if w not in g:
-            m += 1
-            g[w] = unk_v
-    assert set(g.keys()) == ws
-    return g, m
-
-
-# Get BoW one-hot vectors for the given vocabulary.
-# ws - the set of words to assign one-hots.
-def get_bow_vectors(ws):
-    wv = {}
-    wl = list(ws)
-    for w in ws:
-        wv[w] = np.zeros(len(ws))
-        wv[w][wl.index(w)] = 1
-    return wv
-
-
-# Run a GLoVe-based model (either perceptron or FF network with relu activations)
-# wv - list (by modality) of dictionaries mapping all vocabulary words to their word vectors
-# tr_f - list of feature modalities, indexed then by oidx, each has a list of input lists whose members can be looked
-#        up in the vocabulary to vector dictionary wv
-# tr_l - training labels
-# te_f - same as tr_f but for testing
-# te_l - testing labels
-# layers - a list of hidden widths for a FF network or None to create a linear perceptron
-# verbose - whether to print epoch-wise progress
-# Reference: https://github.com/jcjohnson/pytorch-examples/blob/master/nn/two_layer_net_nn.py
-def run_ff_model(wv, tr_f, tr_l, te_f, te_l,
-                 layers=None, batch_size=None, epochs=None,
-                 dropout=0, learning_rate=0.001, opt='sgd',
-                 verbose=False):
-    assert batch_size is not None or epochs is not None
-
-    # Prepare the data.
-    if verbose:
-        print("FF: preparing training and testing data...")
-    tr_inputs = []
-    te_inputs = []
-    classes = []
-    inwidth = None
-    for model_in, orig_in, orig_out in [[tr_inputs, tr_f, tr_l], [te_inputs, te_f, te_l]]:
-        for idx in range(len(orig_in[0])):
-            cat_v = []
-            for midx in range(len(orig_in)):
-                v = wv[midx]
-                modality = orig_in[midx]
-                ob1_ws = [w for ws in modality[idx][0] for w in ws]
-                avg_ob1_v = np.sum([v[w] for w in ob1_ws], axis=0) / len(ob1_ws)
-                ob2_ws = [w for ws in modality[idx][1] for w in ws]
-                avg_ob2_v = np.sum([v[w] for w in ob2_ws], axis=0) / len(ob2_ws)
-                incat = np.concatenate((avg_ob1_v, avg_ob2_v))
-                cat_v = np.concatenate((cat_v, incat))
-            model_in.append(torch.tensor(cat_v, dtype=torch.float).to(device))
-            inwidth = len(model_in[-1])
-            if orig_out[idx] not in classes:
-                classes.append(orig_out[idx])
-    outwidth = len(classes)
-    tr_outputs = torch.tensor(tr_l, dtype=torch.long).to(device).view(len(tr_l), 1)
-    if epochs is None:  # iterate given the batch size to cover all data at least once
-        epochs = int(np.ceil(len(tr_inputs) / float(batch_size)))
-    if batch_size is None:
-        batch_size = len(tr_inputs)
-    if verbose:
-        print("FF: ... done")
-
-    # Construct the model with specified number of hidden layers / dimensions (or none) and relu activations between.
-    if verbose:
-        print("FF: constructing model...")
-    if layers is not None:
-        lr = [nn.Linear(inwidth, layers[0])]
-        for idx in range(1, len(layers)):
-            lr.append(torch.nn.ReLU())
-            if dropout > 0:
-                lr.append(torch.nn.Dropout(dropout))
-            lr.append(nn.Linear(layers[idx - 1], layers[idx]))
-        lr.append(torch.nn.ReLU())
-        lr.append(nn.Linear(layers[-1], outwidth))
-    else:
-        lr = [nn.Linear(inwidth, outwidth)]
-    model = nn.Sequential(*lr).to(device)
-    if verbose:
-        print("FF: ... done")
-
-    # Train: train a neural model for a fixed number of epochs.
-    if verbose:
-        print("FF: training on " + str(len(tr_inputs)) + " inputs with batch size " + str(batch_size) +
-              " for " + str(epochs) + " epochs...")
-    loss_function = nn.CrossEntropyLoss()
-
-    if opt == 'sgd':
-        optimizer = optim.SGD(model.parameters(), lr=learning_rate)
-    elif opt == 'adagrad':
-        optimizer = optim.Adagrad(model.parameters(), lr=learning_rate)
-    elif opt == 'adam':
-        optimizer = optim.Adam(model.parameters(), lr=learning_rate)
-    elif opt == 'rmsprop':
-        optimizer = optim.RMSprop(model.parameters(), lr=learning_rate)
-    else:
-        raise ValueError('Unrecognized opt specification "' + opt + '".')
-
-    best_acc = best_cm = tr_acc_at_best = trcm_at_best = None
-    idxs = list(range(len(tr_inputs)))
-    np.random.shuffle(idxs)
-    tr_inputs = [tr_inputs[idx] for idx in idxs]
-    tr_outputs = tr_outputs[idxs, :]
-    idx = 0
-    for epoch in range(epochs):
-        tloss = 0
-        c = 0
-        trcm = np.zeros(shape=(len(classes), len(classes)))  # note: calculates train acc only over curr batch
-        while c < batch_size:
-            model.zero_grad()
-            logits = model(tr_inputs[idx])
-            loss = loss_function(logits.view(1, len(logits)), tr_outputs[idx])
-            tloss += loss.data.item()
-            trcm[tr_l[c]][logits.max(0)[1]] += 1
-            loss.backward()
-            optimizer.step()
-            c += 1
-            idx += 1
-            if idx == len(tr_inputs):
-                idx = 0
-        tloss /= batch_size
-        tr_acc = get_acc(trcm)
-
-        with torch.no_grad():
-            cm = np.zeros(shape=(len(classes), len(classes)))
-            for jdx in range(len(te_inputs)):
-                logits = model(te_inputs[jdx])
-                pc = logits.max(0)[1]
-                cm[te_l[jdx]][pc] += 1
-            acc = get_acc(cm)
-            if best_acc is None or acc > best_acc:
-                best_acc = acc
-                best_cm = cm
-                tr_acc_at_best = tr_acc
-                trcm_at_best = trcm
-
-        if verbose:
-            print("... epoch " + str(epoch) + " train loss " + str(tloss) + "; train accuracy " + str(tr_acc) +
-                  "; test accuracy " + str(acc))
-    if verbose:
-        print("FF: ... done")
-
-    return best_acc, best_cm, tr_acc_at_best, trcm_at_best
-
-
-def main(args, device):
+def main(args, dv):
     assert args.baseline is None or args.baseline in ['majority', 'nb_names', 'nb_bow',
-                                                      'lstm', 'glove', 'nn_bow', 'resnet', 'glove+resnet']
-    assert args.glove_infile is not None or (args.baseline is not None and args.baseline != 'glove')
+                                                      'lstm', 'glove', 'nn_bow', 'resnet', 'glove+resnet',
+                                                      'glove+resnetS', 'robot', 'glove+resnetS+robot']
+    assert args.glove_infile is not None or (args.baseline is not None and 'glove' not in args.baseline)
+    assert args.robot_infile is not None or (args.baseline is not None and 'robot' not in args.baseline)
     verbose = True if args.verbose == 1 else False
+    test_run = True if args.test == 1 else False
+    assert (not test_run or args.baseline not in ['glove', 'nn_bow', 'resnet', 'glove+resnet', 'glove+resnetS']
+            or args.hyperparam_infile is not None)
 
     # Read in labeled folds.
     print("Reading in labeled folds from '" + args.infile + "'...")
+    robo_train = robo_test = robodata = None
+    if args.robot_infile is not None:
+        with open(args.robot_infile, 'r') as f:
+            robodata = json.load(f)
     with open(args.infile, 'r') as f:
         all_d = json.load(f)
         names = all_d["names"]
         lf = all_d["folds"]
         train = lf['train']
-        test = lf['dev']  # only ever peak at the dev set.
+        if robodata is not None:
+            robo_train = robodata['train']
         preps = train.keys()
+        if test_run:
+            test = lf['test']
+            dev_aug = lf['dev']
+            for p in preps:
+                for k in dev_aug[p].keys():
+                    train[p][k].extend(dev_aug[p][k])
+            if robodata is not None:
+                robo_test = robodata['test']
+                dev_aug = robodata['dev']
+                for p in preps:
+                    for k in dev_aug[p].keys():
+                        robo_train[p][k].extend(dev_aug[p][k])
+        else:
+            test = lf['dev']  # only ever peak at the dev set.
+            if robodata is not None:
+                robo_test = robodata['dev']
     print("... done")
+    if args.task is not None:
+        preps = [args.task]
 
     # Read in metadata.
     print("Reading in metadata from '" + args.metadata_infile + "'...")
@@ -523,7 +95,8 @@ def main(args, device):
 
     # Prep language dictionary.
     maxlen = tr_enc_exps = te_enc_exps = word_to_i_all = word_to_i = None
-    if args.baseline is None or args.baseline in ['nb_bow', 'lstm', 'glove', 'nn_bow', 'glove+resnet']:
+    if args.baseline is None or args.baseline in ['nb_bow', 'lstm', 'glove', 'nn_bow', 'glove+resnet', 'glove+resnetS',
+                                                  'glove+resnetS+robot']:
         print("Preparing infrastructure to run language models...")
         word_to_i = {}
         word_to_i_all = {}
@@ -605,12 +178,14 @@ def main(args, device):
         ff_width_decay = 2
         ff_dropout = 0
         ff_lr = 0.001
-        ff_opt = 'sgd'
+        ff_opt = 'adagrad'
+    ff_random_restarts = None if args.ff_random_restarts is None else \
+        [int(s) for s in args.ff_random_restarts.split(',')]
 
     # Average GLoVe embeddings concatenated and used to predict class.
     g = None
     emb_dim_l = None
-    if args.baseline is None or args.baseline == 'glove' or args.baseline == 'glove+resnet':
+    if args.baseline is None or 'glove' in args.baseline:
         print("Preparing infrastructure to run GLoVe-based feed forward model...")
         ws = set()
         for p in preps:
@@ -630,9 +205,19 @@ def main(args, device):
                     range(len(test[p]["ob1"]))]
             layers = None if ff_layers == 0 else [int(emb_dim_l / np.power(ff_width_decay, lidx) + 0.5)
                                                   for lidx in range(ff_layers)]
-            rs[-1][p] = run_ff_model([g], [tr_f], train[p]["label"], [te_f], test[p]["label"],
-                                     layers=layers, epochs=ff_epochs, dropout=ff_dropout,
-                                     learning_rate=ff_lr, opt=ff_opt, verbose=verbose)
+            if ff_random_restarts is None:
+                rs[-1][p] = run_ff_model(dv, [g], [tr_f], train[p]["label"], [te_f], test[p]["label"],
+                                         layers=layers, epochs=ff_epochs, dropout=ff_dropout,
+                                         learning_rate=ff_lr, opt=ff_opt, verbose=verbose)
+            else:
+                rs[-1][p] = []
+                for seed in ff_random_restarts:
+                    print("... with seed " + str(seed) + "...")
+                    np.random.seed(seed)
+                    torch.manual_seed(seed)
+                    rs[-1][p].append(run_ff_model(dv, [g], [tr_f], train[p]["label"], [te_f], test[p]["label"],
+                                                  layers=layers, epochs=ff_epochs, dropout=ff_dropout,
+                                                  learning_rate=ff_lr, opt=ff_opt, verbose=verbose))
 
     # Average BoW embeddings use to predict class.
     if args.baseline is None or args.baseline == 'nn_bow':
@@ -654,14 +239,24 @@ def main(args, device):
                     range(len(test[p]["ob1"]))]
             layers = None if ff_layers == 0 else [int(emb_dim / np.power(ff_width_decay, lidx) + 0.5)
                                                   for lidx in range(ff_layers)]
-            rs[-1][p] = run_ff_model([wv], [tr_f], train[p]["label"], [te_f], test[p]["label"],
-                                     layers=layers, epochs=ff_epochs, dropout=ff_dropout,
-                                     learning_rate=ff_lr, opt=ff_opt, verbose=verbose)
+            if ff_random_restarts is None:
+                rs[-1][p] = run_ff_model(dv, [wv], [tr_f], train[p]["label"], [te_f], test[p]["label"],
+                                         layers=layers, epochs=ff_epochs, dropout=ff_dropout,
+                                         learning_rate=ff_lr, opt=ff_opt, verbose=verbose)
+            else:
+                rs[-1][p] = []
+                for seed in ff_random_restarts:
+                    print("... with seed " + str(seed) + "...")
+                    np.random.seed(seed)
+                    torch.manual_seed(seed)
+                    rs[-1][p].append(run_ff_model(dv, [wv], [tr_f], train[p]["label"], [te_f], test[p]["label"],
+                                                  layers=layers, epochs=ff_epochs, dropout=ff_dropout,
+                                                  learning_rate=ff_lr, opt=ff_opt, verbose=verbose))
 
     # Average BoW embeddings use to predict class.
     idx_to_v = None
     emb_dim_v = None
-    if args.baseline is None or args.baseline == 'resnet' or args.baseline == 'glove+resnet':
+    if args.baseline is None or 'resnet' in args.baseline:
         print("Preparing infrastructure to run ResNet-based feed forward model...")
         idx_to_v = {}
         resnet_m = resnet.resnet152(pretrained=True)
@@ -700,9 +295,19 @@ def main(args, device):
                     range(len(test[p]["ob1"]))]
             layers = None if ff_layers == 0 else [int(emb_dim_v / np.power(ff_width_decay, lidx) + 0.5)
                                                   for lidx in range(ff_layers)]
-            rs[-1][p] = run_ff_model([idx_to_v], [tr_f], train[p]["label"], [te_f], test[p]["label"],
-                                     layers=layers, epochs=ff_epochs, dropout=ff_dropout,
-                                     learning_rate=ff_lr, opt=ff_opt, verbose=verbose)
+            if ff_random_restarts is None:
+                rs[-1][p] = run_ff_model(dv, [idx_to_v], [tr_f], train[p]["label"], [te_f], test[p]["label"],
+                                         layers=layers, epochs=ff_epochs, dropout=ff_dropout,
+                                         learning_rate=ff_lr, opt=ff_opt, verbose=verbose)
+            else:
+                rs[-1][p] = []
+                for seed in ff_random_restarts:
+                    print("... with seed " + str(seed) + "...")
+                    np.random.seed(seed)
+                    torch.manual_seed(seed)
+                    rs[-1][p].append(run_ff_model(dv, [idx_to_v], [tr_f], train[p]["label"], [te_f], test[p]["label"],
+                                                  layers=layers, epochs=ff_epochs, dropout=ff_dropout,
+                                                  learning_rate=ff_lr, opt=ff_opt, verbose=verbose))
 
     if args.baseline is None or args.baseline == 'glove+resnet':
         print("Running Glove+ResNet FF models")
@@ -711,37 +316,285 @@ def main(args, device):
         emb_dim = emb_dim_l + emb_dim_v
         for p in preps:
             tr_f_l = [[res[train[p][s][idx]] for s in ["ob1", "ob2"]] for idx in
-                    range(len(train[p]["ob1"]))]
+                      range(len(train[p]["ob1"]))]
             te_f_l = [[res[test[p][s][idx]] for s in ["ob1", "ob2"]] for idx in
-                    range(len(test[p]["ob1"]))]
+                      range(len(test[p]["ob1"]))]
             tr_f_v = [[[[train[p][s][idx]]] for s in ["ob1", "ob2"]] for idx in
-                    range(len(train[p]["ob1"]))]
+                      range(len(train[p]["ob1"]))]
             te_f_v = [[[[test[p][s][idx]]] for s in ["ob1", "ob2"]] for idx in
-                    range(len(test[p]["ob1"]))]
+                      range(len(test[p]["ob1"]))]
             layers = None if ff_layers == 0 else [int(emb_dim / np.power(ff_width_decay, lidx) + 0.5)
                                                   for lidx in range(ff_layers)]
-            rs[-1][p] = run_ff_model([g, idx_to_v], [tr_f_l, tr_f_v], train[p]["label"],
+            if ff_random_restarts is None:
+                rs[-1][p] = run_ff_model(dv, [g, idx_to_v], [tr_f_l, tr_f_v], train[p]["label"],
+                                         [te_f_l, te_f_v], test[p]["label"],
+                                         layers=layers, epochs=ff_epochs, dropout=ff_dropout,
+                                         learning_rate=ff_lr, opt=ff_opt, verbose=verbose)
+            else:
+                rs[-1][p] = []
+                for seed in ff_random_restarts:
+                    print("... with seed " + str(seed) + "...")
+                    np.random.seed(seed)
+                    torch.manual_seed(seed)
+                    rs[-1][p].append(run_ff_model(dv, [g, idx_to_v], [tr_f_l, tr_f_v], train[p]["label"],
                                      [te_f_l, te_f_v], test[p]["label"],
                                      layers=layers, epochs=ff_epochs, dropout=ff_dropout,
-                                     learning_rate=ff_lr, opt=ff_opt, verbose=verbose)
+                                     learning_rate=ff_lr, opt=ff_opt, verbose=verbose))
 
-    # Show results.
-    print("Results:")
-    for idx in range(len(bs)):
-        print(" " + bs[idx] + ":")
+    robot_softmax = {}  # map from pairs of objects to softmax over classes
+    tr_robot_softmax = {}  # map from pairs of objects to softmax over classes
+    if args.baseline is None or 'robot' in args.baseline:
+        print("Running Robot Gaussian Naive Bayes models")
+        bs.append("Robot GNB")
+        rs.append({})
         for p in preps:
-            print("  " + p + ":\tacc %0.3f" % rs[idx][p][0] + "\t(train: %0.3f" % rs[idx][p][2] + ")")
-            print("  \tf1  %0.3f" % get_f1(rs[idx][p][1]) + "\t(train: %0.3f" % get_f1(rs[idx][p][3]) + ")")
-            print('\t(CM\t' + '\n\t\t'.join(['\t'.join([str(int(ct)) for ct in rs[idx][p][1][i]])
-                                             for i in range(len(rs[idx][p][1]))]) + ")")
+            robo_test = robo_train  # DEBUG
+            test = train  # DEBUG
 
-    # Write val accuracy results.
-    if args.perf_outfile is not None:
-        with open(args.perf_outfile, 'w') as f:
-            json.dump([{p: [rs[idx][p][0], get_f1(rs[idx][p][1])] for p in preps} for idx in range(len(rs))], f)
+            tr_f = np.asmatrix(
+                [robo_train[p]['feats'][idx][jdx]
+                 for idx in range(len(train[p]["label"])) if robo_train[p]['feats'][idx] is not None
+                 for jdx in range(len(robo_train[p]['feats'][idx]))])
+            tr_l = np.asarray([robo_train[p]['label'][idx]
+                               for idx in range(len(train[p]["label"])) if robo_train[p]['feats'][idx] is not None
+                               for _ in range(len(robo_train[p]['feats'][idx]))])
+            te_f = np.asmatrix(
+                [robo_test[p]['feats'][idx][jdx]
+                 for idx in range(len(test[p]["label"])) if robo_test[p]['feats'][idx] is not None
+                 for jdx in range(len(robo_test[p]['feats'][idx]))])
+            te_l = np.asarray([robo_test[p]['label'][idx]
+                               for idx in range(len(test[p]["label"])) if robo_test[p]['feats'][idx] is not None
+                               for _ in range(len(robo_test[p]['feats'][idx]))])
+            classes = set(train[p]["label"])
+
+            # DEBUG: show majority class results for comparison.
+            print(run_majority_class(tr_l, te_l))[0]
+
+            gnb = GaussianNB()
+            gnb.fit(tr_f, tr_l)
+            if te_f.shape[1] > 0:
+                pcst = gnb.predict(te_f)
+                pcs = get_classes_by_vote([robo_test[p]['feats'][idx] for idx in range(len(test[p]["label"]))
+                                           if robo_test[p]['feats'][idx] is not None], pcst)
+                robot_softmax_l = get_softmax_by_vote([robo_test[p]['feats'][idx]
+                                                       for idx in range(len(test[p]["label"]))
+                                                       if robo_test[p]['feats'][idx] is not None], pcst, len(classes))
+                robot_softmax_k = [(robo_test[p]["ob1"][idx], robo_test[p]["ob2"][idx])
+                                   for idx in range(len(test[p]["label"])) if robo_test[p]['feats'][idx] is not None]
+                robot_softmax = {robot_softmax_k[idx]: robot_softmax_l[idx] for idx in range(len(robot_softmax_k))}
+                gcs = [robo_test[p]['label'][idx] for idx in range(len(test[p]["label"]))
+                       if robo_test[p]['feats'][idx] is not None]
+                cm = np.zeros(shape=(len(classes), len(classes)))
+                for idx in range(len(gcs)):
+                    cm[gcs[idx]][pcs[idx]] += 1
+            else:
+                cm = np.zeros(shape=(len(classes), len(classes)))
+                print("WARNING: no data in the test set!")
+
+            pcst = gnb.predict(tr_f)
+            pcs = get_classes_by_vote([robo_train[p]['feats'][idx] for idx in range(len(train[p]["label"]))
+                                       if robo_train[p]['feats'][idx] is not None], pcst)
+            tr_robot_softmax_l = get_softmax_by_vote([robo_train[p]['feats'][idx]
+                                                      for idx in range(len(train[p]["label"]))
+                                                      if robo_train[p]['feats'][idx] is not None], pcst, len(classes))
+            tr_robot_softmax_k = [(robo_train[p]["ob1"][idx], robo_train[p]["ob2"][idx])
+                                  for idx in range(len(train[p]["label"])) if robo_train[p]['feats'][idx] is not None]
+            tr_robot_softmax = {tr_robot_softmax_k[idx]: tr_robot_softmax_l[idx]
+                                for idx in range(len(tr_robot_softmax_k))}
+            gcs = [robo_train[p]['label'][idx] for idx in range(len(train[p]["label"]))
+                   if robo_train[p]['feats'][idx] is not None]
+            trcm = np.zeros(shape=(len(classes), len(classes)))
+            for idx in range(len(gcs)):
+                trcm[gcs[idx]][pcs[idx]] += 1
+
+            rs[-1][p] = get_acc(cm), cm, get_acc(trcm), trcm
+
+    if args.baseline is None or 'glove+resnetS' in args.baseline:
+        if 'robot' not in args.baseline:
+            print("Running Glove+ResNet (Shrink) FF models")
+            bs.append("GLoVe+ResNet (Shrink) FF")
+        else:
+            print("Running Glove+ResNet+Robot models")
+            bs.append("GLoVe+ResNet+Robot")
+        rs.append({})
+        for p in preps:
+
+            # Prepare input to model.
+            tr_f_l = [[res[train[p][s][idx]] for s in ["ob1", "ob2"]] for idx in
+                      range(len(train[p]["ob1"]))]
+            te_f_l = [[res[test[p][s][idx]] for s in ["ob1", "ob2"]] for idx in
+                      range(len(test[p]["ob1"]))]
+            tr_f_v = [[[[train[p][s][idx]]] for s in ["ob1", "ob2"]] for idx in
+                      range(len(train[p]["ob1"]))]
+            te_f_v = [[[[test[p][s][idx]]] for s in ["ob1", "ob2"]] for idx in
+                      range(len(test[p]["ob1"]))]
+            wv = [g, idx_to_v]
+
+            # Convert structured data into tensor inputs.
+            tr_inputs = []
+            te_inputs = []
+            classes = set()
+            for model_in, orig_in, orig_out in [[tr_inputs, [tr_f_l, tr_f_v], train[p]["label"]],
+                                                [te_inputs, [te_f_l, te_f_v], test[p]["label"]]]:
+                for idx in range(len(orig_in[0])):
+                    all_in = []
+                    for midx in range(len(orig_in)):
+                        v = wv[midx]
+                        modality = orig_in[midx]
+                        ob1_ws = [w for ws in modality[idx][0] for w in ws]
+                        avg_ob1_v = np.sum([v[w] for w in ob1_ws], axis=0) / len(ob1_ws)
+                        ob2_ws = [w for ws in modality[idx][1] for w in ws]
+                        avg_ob2_v = np.sum([v[w] for w in ob2_ws], axis=0) / len(ob2_ws)
+                        incat = torch.tensor(np.concatenate((avg_ob1_v, avg_ob2_v)), dtype=torch.float).to(dv)
+                        all_in.append(incat)
+                    model_in.append(all_in)
+                    if orig_out[idx] not in classes:
+                        classes.add(orig_out[idx])
+            tr_outputs = torch.tensor(train[p]["label"], dtype=torch.long).view(len(train[p]["label"]), 1).to(dv)
+            batch_size = len(tr_inputs)
+
+            # Instantiate model and optimizer.
+            emb_dim = 2 * min(emb_dim_l, emb_dim_v)
+            hidden_layer_widths = [int(emb_dim / np.power(ff_width_decay, lidx) + 0.5) for lidx in range(ff_layers)]
+            model = EarlyFusionFFModel(dv, [emb_dim_l * 2, emb_dim_v * 2],  # input is concatenated across two objects
+                                       True, hidden_layer_widths, ff_dropout, len(classes)).to(dv)
+            loss_function = nn.CrossEntropyLoss()
+            if ff_opt == 'sgd':
+                optimizer = optim.SGD(model.param_list, lr=ff_lr)
+            elif ff_opt == 'adagrad':
+                optimizer = optim.Adagrad(model.param_list, lr=ff_lr)
+            elif ff_opt == 'adam':
+                optimizer = optim.Adam(model.param_list, lr=ff_lr)
+            elif ff_opt == 'rmsprop':
+                optimizer = optim.RMSprop(model.param_list, lr=ff_lr)
+            else:
+                raise ValueError('Unrecognized opt specification "' + ff_opt + '".')
+
+            # Train model.
+            if ff_random_restarts is None:
+                seeds = [None]
+            else:
+                seeds = ff_random_restarts
+                rs[-1][p] = []
+            for seed in seeds:
+                if seed is not None:
+                    print("... with seed " + str(seed) + "...")
+                    np.random.seed(seed)
+                    torch.manual_seed(seed)
+
+                # Run training for specified number of epochs.
+                best_acc = best_cm = tr_acc_at_best = trcm_at_best = None
+                idxs = list(range(len(tr_inputs)))
+                np.random.shuffle(idxs)
+                tr_inputs = [tr_inputs[idx] for idx in idxs]
+                tr_outputs = tr_outputs[idxs, :]
+                idx = 0
+                result = None
+                for epoch in range(ff_epochs):
+                    tloss = 0
+                    c = 0
+                    trcm = np.zeros(shape=(len(classes), len(classes)))  # note: calculates train acc on curr batch only
+                    while c < batch_size:
+                        model.zero_grad()
+                        logits = model(tr_inputs[idx])
+                        loss = loss_function(logits.view(1, len(logits)), tr_outputs[idx])
+                        tloss += loss.data.item()
+
+                        # Record performance only on subset of data that we have robot features for in MM model.
+                        # FF model is still trained on all data, but we only want the CM for robot features.
+                        if 'robot' in args.baseline:
+                            detatched_softmax = F.softmax(logits.clone(), dim=0)
+                            ob1 = train[p]["ob1"][idx]
+                            ob2 = train[p]["ob2"][idx]
+                            if (ob1, ob2) in tr_robot_softmax:
+                                detatched_softmax += torch.tensor(tr_robot_softmax[(ob1, ob2)],
+                                                                  dtype=torch.float).to(dv)
+                                trcm[train[p]["label"][idx]][detatched_softmax.max(0)[1]] += 1
+                        else:
+                            trcm[train[p]["label"][idx]][logits.max(0)[1]] += 1
+
+                        loss.backward()
+                        optimizer.step()
+                        c += 1
+                        idx += 1
+                        if idx == len(tr_inputs):
+                            idx = 0
+                    tloss /= batch_size
+                    tr_acc = get_acc(trcm)
+
+                    with torch.no_grad():
+                        cm = np.zeros(shape=(len(classes), len(classes)))
+                        for jdx in range(len(te_inputs)):
+                            logits = model(te_inputs[jdx])
+
+                            if 'robot' in args.baseline:
+                                detatched_softmax = F.softmax(logits.clone(), dim=0)
+                                ob1 = test[p]["ob1"][jdx]
+                                ob2 = test[p]["ob2"][jdx]
+                                if (ob1, ob2) in robot_softmax:
+                                    # TODO: this is where we can get the glove+resnet vote, the robot vote,
+                                    # TODO: and the pooled vote for visualization / analysis in the paper.
+                                    detatched_softmax += torch.tensor(robot_softmax[(ob1, ob2)],
+                                                                      dtype=torch.float).to(dv)
+                                    cm[test[p]["label"][jdx]][detatched_softmax.max(0)[1]] += 1
+                            else:
+                                cm[test[p]["label"][jdx]][logits.max(0)[1]] += 1
+
+                        acc = get_acc(cm)
+                        if best_acc is None or acc > best_acc:
+                            best_acc = acc
+                            best_cm = cm
+                            tr_acc_at_best = tr_acc
+                            trcm_at_best = trcm
+                    result = best_acc, best_cm, tr_acc_at_best, trcm_at_best
+
+                if seed is None:
+                    rs[-1][p] = result
+                else:
+                    rs[-1][p].append(result)
+
+    if ff_random_restarts is None:
+        # Show results.
+        print("Results:")
+        for idx in range(len(bs)):
+            print(" " + bs[idx] + ":")
+            for p in preps:
+                print("  " + p + ":\tacc %0.3f" % rs[idx][p][0] + "\t(train: %0.3f" % rs[idx][p][2] + ")")
+                print("  \tf1  %0.3f" % get_f1(rs[idx][p][1]) + "\t(train: %0.3f" % get_f1(rs[idx][p][3]) + ")")
+                print('\t(CM\t' + '\n\t\t'.join(['\t'.join([str(int(ct)) for ct in rs[idx][p][1][i]])
+                                                 for i in range(len(rs[idx][p][1]))]) + ")")
+
+        # Write val accuracy results.
+        if args.perf_outfile is not None:
+            print("Writing results to '" + args.perf_outfile + "'...")
+            with open(args.perf_outfile, 'w') as f:
+                json.dump([{p: [rs[idx][p][0], get_f1(rs[idx][p][1])] for p in preps} for idx in range(len(rs))], f)
+            print("... done")
+
+    else:
+        print("Results:")
+        for idx in range(len(bs)):
+            print(" " + bs[idx] + ":")
+            for p in preps:
+                avg_acc = np.average([rs[idx][p][jdx][0] for jdx in range(len(ff_random_restarts))])
+                avg_tr_acc = np.average([rs[idx][p][jdx][2] for jdx in range(len(ff_random_restarts))])
+                avg_f1 = np.average([get_f1(rs[idx][p][jdx][1]) for jdx in range(len(ff_random_restarts))])
+                avg_tr_f1 = np.average([get_f1(rs[idx][p][jdx][3]) for jdx in range(len(ff_random_restarts))])
+                print("  " + p + ":\tacc %0.3f" % avg_acc + "\t(train: %0.3f" % avg_tr_acc + ")")
+                print("  \tf1  %0.3f" % avg_f1 + "\t(train: %0.3f" % avg_tr_f1 + ")")
+
+        # Write out results for all seeds so that a downstream script can process them for stat sig.
+        if args.perf_outfile is not None:
+            print("Writing results to '" + args.perf_outfile + "'...")
+            with open(args.perf_outfile, 'w') as f:
+                json.dump([{p: {"acc": [rs[idx][p][jdx][0] for jdx in range(len(ff_random_restarts))],
+                                "tr_acc": [rs[idx][p][jdx][2] for jdx in range(len(ff_random_restarts))],
+                                "f1": [get_f1(rs[idx][p][jdx][1]) for jdx in range(len(ff_random_restarts))],
+                                "tr_f1": [get_f1(rs[idx][p][jdx][3]) for jdx in range(len(ff_random_restarts))]}
+                            for p in preps} for idx in range(len(rs))], f)
+            print("... done")
 
 
-# TODO: ResNet-class models (instead of penultimate layer) for alone and w GLoVe.
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
@@ -751,9 +604,14 @@ if __name__ == "__main__":
                         help="input json file with object metadata")
     parser.add_argument('--baseline', type=str, required=False,
                         help="if None, all will run, else 'majority', 'nb_names', 'nb_bow', 'lstm', 'glove'," +
-                             " 'nn_bow', 'resnet', 'glove+resnet'")
+                             " 'nn_bow', 'resnet', 'glove+resnet', 'glove+resnetS', 'robot'," +
+                             " 'gloveS+resnetS+robot")
+    parser.add_argument('--task', type=str, required=False,
+                        help="the task to perform; if None, will do both 'on' and 'in'")
     parser.add_argument('--glove_infile', type=str, required=False,
                         help="input glove vector text file if running glove baseline")
+    parser.add_argument('--robot_infile', type=str, required=False,
+                        help="input robot feature file")
     parser.add_argument('--hyperparam_infile', type=str, required=False,
                         help="input json for model hyperparameters")
     parser.add_argument('--perf_outfile', type=str, required=False,
@@ -762,5 +620,9 @@ if __name__ == "__main__":
                         help="1 if desired")
     parser.add_argument('--ff_epochs', type=int, required=False,
                         help="override default number of epochs")
+    parser.add_argument('--ff_random_restarts', type=str, required=False,
+                        help="comma-separated list of random seeds to use; presents avg + stddev data instead of cms")
+    parser.add_argument('--test', type=int, required=False,
+                        help="if set to 1, evaluates on the test set; NOT FOR TUNING")
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     main(parser.parse_args(), device)

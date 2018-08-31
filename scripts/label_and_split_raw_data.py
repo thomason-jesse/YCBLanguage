@@ -6,8 +6,8 @@ __author__ = 'thomason-jesse'
 # {"folds":
 #   {fold:
 #     {prep:
-#       {"ob1": [oidx, ...}
-#       {"ob2": [ojdx, ...}
+#       {"ob1": [oidx, ...]}
+#       {"ob2": [ojdx, ...]}
 #       {"label": [lij, ...]}
 #     }
 #   }
