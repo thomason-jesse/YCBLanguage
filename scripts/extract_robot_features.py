@@ -26,6 +26,20 @@ def robo_data_ob_name_converter(n):
         n = n[:-5] + "_cups"
     if n[-3:] == "_ca":
         n = n[:-3] + "_can"
+    if n[-3:] == "_bo":
+        n = n[:-3] + "_box"
+    if n[-4:] == "_tes":
+        n = n[:-4] + "_test"
+    if n[-5:] == "_plat":
+        n = n[:-5] + "_plate"
+    if n[-5:] == "_clam":
+        n = n[:-5] + "_clamp"
+    if n[-5:] == "_glas":
+        n = n[:-5] + "_glass"
+    if n[-8:] == "_softbal":
+        n = n[:-8] + "_softball"
+    if n[-11:] == "_screwdrive":
+        n = n[:-11] + "_screwdriver"
     return n
 
 

@@ -19,9 +19,10 @@ def main(args, dv):
                                                       'lstm', 'glove', 'nn_bow', 'resnet', 'glove+resnet',
                                                       'glove+resnetS', 'robot', 'glove+resnetS+robot']
     assert args.glove_infile is not None or (args.baseline is not None and 'glove' not in args.baseline)
-    assert args.robot_infile is not None or (args.baseline is not None and 'robot' not in args.baseline)
+    assert (args.robot_infile is not None or
+            (args.baseline is not None and 'robot' not in args.baseline and args.test_robot == 0))
     verbose = True if args.verbose == 1 else False
-    test_run = True if args.test == 1 else False
+    test_run = True if args.test == 1 or args.test_robot == 1 else False
     assert (not test_run or args.baseline not in ['glove', 'nn_bow', 'resnet', 'glove+resnet', 'glove+resnetS']
             or args.hyperparam_infile is not None)
 
@@ -71,13 +72,80 @@ def main(args, dv):
     bs = []
     rs = []
 
+    robot_softmax = {}  # map from pairs of objects to softmax over classes
+    tr_robot_softmax = {}  # map from pairs of objects to softmax over classes
+    if args.baseline is None or 'robot' in args.baseline or args.test_robot == 1:
+        print("Running Robot Gaussian Naive Bayes models")
+        bs.append("Robot GNB")
+        rs.append({})
+        for p in preps:
+            tr_f = np.asmatrix(
+                [robo_train[p]['feats'][idx][jdx]
+                 for idx in range(len(train[p]["label"])) if robo_train[p]['feats'][idx] is not None
+                 for jdx in range(len(robo_train[p]['feats'][idx]))])
+            tr_l = np.asarray([robo_train[p]['label'][idx]
+                               for idx in range(len(train[p]["label"])) if robo_train[p]['feats'][idx] is not None
+                               for _ in range(len(robo_train[p]['feats'][idx]))])  # treat each trial independently
+            te_f = np.asmatrix(
+                [robo_test[p]['feats'][idx][jdx]
+                 for idx in range(len(test[p]["label"])) if robo_test[p]['feats'][idx] is not None
+                 for jdx in range(len(robo_test[p]['feats'][idx]))])
+            classes = set(train[p]["label"])
+
+            gnb = GaussianNB()
+            gnb.fit(tr_f, tr_l)
+            if te_f.shape[1] > 0:
+                pcst = gnb.predict(te_f)
+                pcs = get_classes_by_vote([robo_test[p]['feats'][idx] for idx in range(len(test[p]["label"]))
+                                           if robo_test[p]['feats'][idx] is not None], pcst)
+                robot_softmax_l = get_softmax_by_vote([robo_test[p]['feats'][idx]
+                                                       for idx in range(len(test[p]["label"]))
+                                                       if robo_test[p]['feats'][idx] is not None], pcst, len(classes))
+                robot_softmax_k = [(robo_test[p]["ob1"][idx], robo_test[p]["ob2"][idx])
+                                   for idx in range(len(test[p]["label"])) if robo_test[p]['feats'][idx] is not None]
+                robot_softmax[p] = {robot_softmax_k[idx]: robot_softmax_l[idx] for idx in range(len(robot_softmax_k))}
+                gcs = [robo_test[p]['label'][idx] for idx in range(len(test[p]["label"]))
+                       if robo_test[p]['feats'][idx] is not None]
+                cm = np.zeros(shape=(len(classes), len(classes)))
+                for idx in range(len(gcs)):
+                    cm[gcs[idx]][pcs[idx]] += 1
+            else:
+                cm = np.zeros(shape=(len(classes), len(classes)))
+                print("WARNING: no data in the test set!")
+
+            pcst = gnb.predict(tr_f)
+            pcs = get_classes_by_vote([robo_train[p]['feats'][idx] for idx in range(len(train[p]["label"]))
+                                       if robo_train[p]['feats'][idx] is not None], pcst)
+            tr_robot_softmax_l = get_softmax_by_vote([robo_train[p]['feats'][idx]
+                                                      for idx in range(len(train[p]["label"]))
+                                                      if robo_train[p]['feats'][idx] is not None], pcst, len(classes))
+            tr_robot_softmax_k = [(robo_train[p]["ob1"][idx], robo_train[p]["ob2"][idx])
+                                  for idx in range(len(train[p]["label"])) if robo_train[p]['feats'][idx] is not None]
+            tr_robot_softmax[p] = {tr_robot_softmax_k[idx]: tr_robot_softmax_l[idx]
+                                   for idx in range(len(tr_robot_softmax_k))}
+            gcs = [robo_train[p]['label'][idx] for idx in range(len(train[p]["label"]))
+                   if robo_train[p]['feats'][idx] is not None]
+            trcm = np.zeros(shape=(len(classes), len(classes)))
+            for idx in range(len(gcs)):
+                trcm[gcs[idx]][pcs[idx]] += 1
+
+            rs[-1][p] = get_acc(cm), cm, get_acc(trcm), trcm
+
     # Majority class baseline.
     if args.baseline is None or args.baseline == 'majority':
         print("Running majority class baseline...")
         bs.append("Majority Class")
         rs.append({})
         for p in preps:
-            rs[-1][p] = run_majority_class(train[p]["label"], test[p]["label"])
+            if args.test_robot:
+                mc_tr = [train[p]["label"][idx] for idx in range(len(train[p]["label"]))
+                         if (train[p]["ob1"][idx], train[p]["ob2"][idx]) in tr_robot_softmax[p]]
+                mc_te = [test[p]["label"][idx] for idx in range(len(test[p]["label"]))
+                         if (test[p]["ob1"][idx], test[p]["ob2"][idx]) in robot_softmax[p]]
+            else:
+                mc_tr = train[p]["label"]
+                mc_te = train[p]["label"]
+            rs[-1][p] = run_majority_class(mc_tr, mc_te)
         print("... done")
 
     # Majority class | object ids baseline.
@@ -343,74 +411,6 @@ def main(args, dv):
                                      layers=layers, epochs=ff_epochs, dropout=ff_dropout,
                                      learning_rate=ff_lr, opt=ff_opt, verbose=verbose))
 
-    robot_softmax = {}  # map from pairs of objects to softmax over classes
-    tr_robot_softmax = {}  # map from pairs of objects to softmax over classes
-    if args.baseline is None or 'robot' in args.baseline:
-        print("Running Robot Gaussian Naive Bayes models")
-        bs.append("Robot GNB")
-        rs.append({})
-        for p in preps:
-            robo_test = robo_train  # DEBUG
-            test = train  # DEBUG
-
-            tr_f = np.asmatrix(
-                [robo_train[p]['feats'][idx][jdx]
-                 for idx in range(len(train[p]["label"])) if robo_train[p]['feats'][idx] is not None
-                 for jdx in range(len(robo_train[p]['feats'][idx]))])
-            tr_l = np.asarray([robo_train[p]['label'][idx]
-                               for idx in range(len(train[p]["label"])) if robo_train[p]['feats'][idx] is not None
-                               for _ in range(len(robo_train[p]['feats'][idx]))])
-            te_f = np.asmatrix(
-                [robo_test[p]['feats'][idx][jdx]
-                 for idx in range(len(test[p]["label"])) if robo_test[p]['feats'][idx] is not None
-                 for jdx in range(len(robo_test[p]['feats'][idx]))])
-            te_l = np.asarray([robo_test[p]['label'][idx]
-                               for idx in range(len(test[p]["label"])) if robo_test[p]['feats'][idx] is not None
-                               for _ in range(len(robo_test[p]['feats'][idx]))])
-            classes = set(train[p]["label"])
-
-            # DEBUG: show majority class results for comparison.
-            print(run_majority_class(tr_l, te_l))[0]
-
-            gnb = GaussianNB()
-            gnb.fit(tr_f, tr_l)
-            if te_f.shape[1] > 0:
-                pcst = gnb.predict(te_f)
-                pcs = get_classes_by_vote([robo_test[p]['feats'][idx] for idx in range(len(test[p]["label"]))
-                                           if robo_test[p]['feats'][idx] is not None], pcst)
-                robot_softmax_l = get_softmax_by_vote([robo_test[p]['feats'][idx]
-                                                       for idx in range(len(test[p]["label"]))
-                                                       if robo_test[p]['feats'][idx] is not None], pcst, len(classes))
-                robot_softmax_k = [(robo_test[p]["ob1"][idx], robo_test[p]["ob2"][idx])
-                                   for idx in range(len(test[p]["label"])) if robo_test[p]['feats'][idx] is not None]
-                robot_softmax = {robot_softmax_k[idx]: robot_softmax_l[idx] for idx in range(len(robot_softmax_k))}
-                gcs = [robo_test[p]['label'][idx] for idx in range(len(test[p]["label"]))
-                       if robo_test[p]['feats'][idx] is not None]
-                cm = np.zeros(shape=(len(classes), len(classes)))
-                for idx in range(len(gcs)):
-                    cm[gcs[idx]][pcs[idx]] += 1
-            else:
-                cm = np.zeros(shape=(len(classes), len(classes)))
-                print("WARNING: no data in the test set!")
-
-            pcst = gnb.predict(tr_f)
-            pcs = get_classes_by_vote([robo_train[p]['feats'][idx] for idx in range(len(train[p]["label"]))
-                                       if robo_train[p]['feats'][idx] is not None], pcst)
-            tr_robot_softmax_l = get_softmax_by_vote([robo_train[p]['feats'][idx]
-                                                      for idx in range(len(train[p]["label"]))
-                                                      if robo_train[p]['feats'][idx] is not None], pcst, len(classes))
-            tr_robot_softmax_k = [(robo_train[p]["ob1"][idx], robo_train[p]["ob2"][idx])
-                                  for idx in range(len(train[p]["label"])) if robo_train[p]['feats'][idx] is not None]
-            tr_robot_softmax = {tr_robot_softmax_k[idx]: tr_robot_softmax_l[idx]
-                                for idx in range(len(tr_robot_softmax_k))}
-            gcs = [robo_train[p]['label'][idx] for idx in range(len(train[p]["label"]))
-                   if robo_train[p]['feats'][idx] is not None]
-            trcm = np.zeros(shape=(len(classes), len(classes)))
-            for idx in range(len(gcs)):
-                trcm[gcs[idx]][pcs[idx]] += 1
-
-            rs[-1][p] = get_acc(cm), cm, get_acc(trcm), trcm
-
     if args.baseline is None or 'glove+resnetS' in args.baseline:
         if 'robot' not in args.baseline:
             print("Running Glove+ResNet (Shrink) FF models")
@@ -504,13 +504,14 @@ def main(args, dv):
 
                         # Record performance only on subset of data that we have robot features for in MM model.
                         # FF model is still trained on all data, but we only want the CM for robot features.
-                        if 'robot' in args.baseline:
+                        if args.test_robot:
                             detatched_softmax = F.softmax(logits.clone(), dim=0)
                             ob1 = train[p]["ob1"][idx]
                             ob2 = train[p]["ob2"][idx]
-                            if (ob1, ob2) in tr_robot_softmax:
-                                detatched_softmax += torch.tensor(tr_robot_softmax[(ob1, ob2)],
-                                                                  dtype=torch.float).to(dv)
+                            if (ob1, ob2) in tr_robot_softmax[p]:
+                                if 'robot' in args.baseline:
+                                    detatched_softmax += torch.tensor(tr_robot_softmax[p][(ob1, ob2)],
+                                                                      dtype=torch.float).to(dv)
                                 trcm[train[p]["label"][idx]][detatched_softmax.max(0)[1]] += 1
                         else:
                             trcm[train[p]["label"][idx]][logits.max(0)[1]] += 1
@@ -529,15 +530,16 @@ def main(args, dv):
                         for jdx in range(len(te_inputs)):
                             logits = model(te_inputs[jdx])
 
-                            if 'robot' in args.baseline:
+                            if args.test_robot:
                                 detatched_softmax = F.softmax(logits.clone(), dim=0)
                                 ob1 = test[p]["ob1"][jdx]
                                 ob2 = test[p]["ob2"][jdx]
-                                if (ob1, ob2) in robot_softmax:
+                                if (ob1, ob2) in robot_softmax[p]:
                                     # TODO: this is where we can get the glove+resnet vote, the robot vote,
                                     # TODO: and the pooled vote for visualization / analysis in the paper.
-                                    detatched_softmax += torch.tensor(robot_softmax[(ob1, ob2)],
-                                                                      dtype=torch.float).to(dv)
+                                    if 'robot' in args.baseline:
+                                        detatched_softmax += torch.tensor(robot_softmax[p][(ob1, ob2)],
+                                                                          dtype=torch.float).to(dv)
                                     cm[test[p]["label"][jdx]][detatched_softmax.max(0)[1]] += 1
                             else:
                                 cm[test[p]["label"][jdx]][logits.max(0)[1]] += 1
@@ -626,5 +628,7 @@ if __name__ == "__main__":
                         help="comma-separated list of random seeds to use; presents avg + stddev data instead of cms")
     parser.add_argument('--test', type=int, required=False,
                         help="if set to 1, evaluates on the test set; NOT FOR TUNING")
+    parser.add_argument('--test_robot', type=int, required=False,
+                        help="if set to 1, train on robo dev+train subset, test on robo test subset")
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     main(parser.parse_args(), device)
