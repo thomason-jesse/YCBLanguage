@@ -7,13 +7,14 @@ __author__ = 'thomason-jesse'
 #     {"ob1": [oidx, ...]}  # Contains all pairs
 #     {"ob2": [ojdx, ...]}
 #     {"feats": [robot_feat_vij, ...]}  # Is set to None when the behavior hasn't been performed.
-#     {"label": [lij, ...]}
+#     {"label": [lij, ...]}  # from robo ground truth annotations, not MTurk
 #   }
 # }
 import argparse
 import json
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 from matplotlib import colors
 
 
@@ -28,6 +29,8 @@ def robo_data_ob_name_converter(n):
         n = n[:-3] + "_can"
     if n[-3:] == "_bo":
         n = n[:-3] + "_box"
+    if n[-3:] == "_ke":
+        n = n[:-3] + "_key"
     if n[-4:] == "_tes":
         n = n[:-4] + "_test"
     if n[-5:] == "_plat":
@@ -40,26 +43,25 @@ def robo_data_ob_name_converter(n):
         n = n[:-8] + "_softball"
     if n[-11:] == "_screwdrive":
         n = n[:-11] + "_screwdriver"
+    if n[-5:] == "_dupl":
+        n = n[:-5] + "_duplo"
+    if n[-6:] == "_orang":
+        n = n[:-6] + "_orange"
+    if n[-8:] == "_airplan":
+        n = n[:-8] + "_airplane"
+    if n[-7:] == "_marble":
+        n = n[:-7] + "_marbles"
+    if n[-7:] == "_padloc":
+        n = n[:-7] + "_padlock"
     return n
 
 
-# Given depth map at time 0, d0, and time 1, d1, extract num_feats features describing the difference in these
-# depth maps. For each feature, a radial band around the origin is constructed, and the feature is the average
-# depth change between time 0 and time 1 in that band. If num_feats=1, the average is over the entire depth map.
-# If num_feats>1, bands extend outwards from the origin, evenly spaced by radius to the border. Cells closer to
-# the border than to a radial band centerline will be discarded (e.g., cells outside the normalized unit circle).
-def depthmaps_to_features(d0, d1, raw_origin, num_feats, verbose=False):
-    t1dm = np.asmatrix(d1)
-    t0dm = np.asmatrix(d0)
-    depth_delta = t1dm - t0dm
-    avg_depth = np.average(depth_delta)
-    depth_delta -= avg_depth  # move average depth change towards 0 to normalize against camera height differences
-    max_spread = max(abs(np.max(depth_delta)), abs(np.min(depth_delta)))
-    depth_delta = depth_delta / max_spread  # normalize depth_delta to [-1, 1] with 0 expected no change
-    depth_delta = (depth_delta + 1) / 2  # normalize depth_delta to [0, 1] with 0.5 expected no change
-    grade = 100  # for verbose, how many distinct shades of blue to use (lower means higher contrast)
-    pooled_origin = [dim / 10. for dim in raw_origin]
-    pooled_origin = [pooled_origin[1], pooled_origin[0]]  # (coord x,y have to be swapped; Rosario might fix)
+def depthmap_to_radial(d, pooled_origin, num_feats, grade, verbose=False):
+    # avg_depth = np.average(d)
+    # d -= avg_depth  # move average depth change towards 0 to normalize against camera height differences
+    max_spread = max(abs(np.max(d)), abs(np.min(d)))
+    d = d / max_spread  # normalize depth_delta to [-1, 1] with 0 expected no change
+    d = (d + 1) / 2  # normalize depth_delta to [0, 1] with 0.5 expected no change
 
     # Visualize raw depth changes.
     if verbose:
@@ -68,9 +70,13 @@ def depthmaps_to_features(d0, d1, raw_origin, num_feats, verbose=False):
         bounds = range(grade)
         norm = colors.BoundaryNorm(bounds, cmap.N)
         fig, ax = plt.subplots()
-        ax.imshow([[depth_delta[xidx, yidx] * grade
-                    for yidx in range(depth_delta.shape[1])]
-                   for xidx in range(depth_delta.shape[0])], cmap=cmap, norm=norm)
+        ax.imshow([[d[xidx, yidx] * grade
+                    for yidx in range(d.shape[1])]
+                   for xidx in range(d.shape[0])], cmap=cmap, norm=norm)
+        for spine in plt.gca().spines.values():
+            spine.set_visible(False)
+        plt.tick_params(top='off', bottom='off', left='off', right='off', labelleft='off',
+                        labelbottom='off', labeltop='off')
         plt.show()
 
     # Extract radial features from maps.
@@ -82,14 +88,14 @@ def depthmaps_to_features(d0, d1, raw_origin, num_feats, verbose=False):
     # case that Object B was exactly centered in the image.
     band_upper_limits = [0.5 * (fidx + 1) / float(num_feats) for fidx in range(num_feats)]
     cell_to_feature = {}
-    for xidx in range(depth_delta.shape[0]):
-        x = (pooled_origin[0] - xidx) / float(depth_delta.shape[0])  # normalize to [-1, 1]
-        for yidx in range(depth_delta.shape[1]):
-            y = (pooled_origin[1] - yidx) / float(depth_delta.shape[1])   # normalize to [-1, 1]
-            d = np.linalg.norm([x, y])
+    for xidx in range(d.shape[0]):
+        x = (pooled_origin[0] - xidx) / float(d.shape[0])  # normalize to [-1, 1]
+        for yidx in range(d.shape[1]):
+            y = (pooled_origin[1] - yidx) / float(d.shape[1])  # normalize to [-1, 1]
+            dist = np.linalg.norm([x, y])
             feat = None
             for fidx in range(num_feats):
-                if d < band_upper_limits[fidx]:
+                if dist < band_upper_limits[fidx]:
                     feat = fidx
                     break
             if feat is None:
@@ -98,14 +104,40 @@ def depthmaps_to_features(d0, d1, raw_origin, num_feats, verbose=False):
             cell_to_feature[(xidx, yidx)] = feat
 
     # Take the average depth change per band.
-    features = [np.average([depth_delta[xidx, yidx] for xidx, yidx in cells_by_feature[fidx]])
+    stddev = np.std([d[xidx, yidx] for yidx in range(d.shape[1]) for xidx in range(d.shape[0])])
+    gavg = np.average([d[xidx, yidx] for yidx in range(d.shape[1]) for xidx in range(d.shape[0])])
+    features = [1 if np.average([d[xidx, yidx] for xidx, yidx in cells_by_feature[fidx]]) > gavg + stddev else (1 if np.average([d[xidx, yidx] for xidx, yidx in cells_by_feature[fidx]]) < gavg - stddev else 0)
                 for fidx in range(num_feats + 1)]
+    return features, cells_by_feature, cell_to_feature, stddev, gavg
+
+
+# Given depth map at time 0, d0, and time 1, d1, extract num_feats features describing the difference in these
+# depth maps. For each feature, a radial band around the origin is constructed, and the feature is the average
+# depth change between time 0 and time 1 in that band. If num_feats=1, the average is over the entire depth map.
+# If num_feats>1, bands extend outwards from the origin, evenly spaced by radius to the border. Cells closer to
+# the border than to a radial band centerline will be discarded (e.g., cells outside the normalized unit circle).
+def depthmaps_to_features(d0, d1, raw_origin, num_feats, verbose=False, rad_before=False):
+    t1dm = np.asmatrix(d1)
+    t0dm = np.asmatrix(d0)
+    grade = 255  # for verbose, how many distinct shades of to use (lower means higher contrast)
+    pooled_origin = [dim / 10. for dim in raw_origin]
+    pooled_origin = [pooled_origin[1], pooled_origin[0]]  # (coord x,y have to be swapped; Rosario might fix)
+
+    d = t1dm - t0dm
+    if rad_before:
+        features_d0, _, _, _, _ = depthmap_to_radial(t0dm, pooled_origin, num_feats, grade, verbose=verbose)
+        features_d1, cells_by_feature, cell_to_feature, _, _ = depthmap_to_radial(t1dm, pooled_origin, num_feats, grade,
+                                                                            verbose=verbose)
+        features = [0.5 + features_d1[fidx] - features_d0[fidx] for fidx in range(num_feats + 1)]
+    else:
+        features, cells_by_feature, cell_to_feature, stddev, gavg = depthmap_to_radial(d, pooled_origin, num_feats,
+                                                                                       grade, verbose=verbose)
 
     # Visualize average depth changes.
     if verbose:
         if verbose:
             print("cells_by_feature:")
-            print("\t" + "\n\t".join([str(fidx) + ":\t" + str(len(cells_by_feature[fidx]))
+            print("\t" + "\n\t".join([str(fidx) + ":\t" + str(len(cells_by_feature[fidx])) + "\t" + str(np.min([d[xidx, yidx] for xidx, yidx in cells_by_feature[fidx]])) + "\t%.2f" % np.average([d[xidx, yidx] for xidx, yidx in cells_by_feature[fidx]]) + "\t" + str(np.max([d[xidx, yidx] for xidx, yidx in cells_by_feature[fidx]]))
                                       for fidx in range(num_feats)]))
             print("cells discarded:\t" + str(len(cells_by_feature[num_feats])))
             print("features: " + str(features[:-1]))
@@ -116,11 +148,15 @@ def depthmaps_to_features(d0, d1, raw_origin, num_feats, verbose=False):
         norm = colors.BoundaryNorm(bounds, cmap.N)
         fig, ax = plt.subplots()
         ax.imshow([[features[cell_to_feature[(xidx, yidx)]] * grade
-                   for yidx in range(depth_delta.shape[1])]
-                   for xidx in range(depth_delta.shape[0])], cmap=cmap, norm=norm)
+                   for yidx in range(d.shape[1])]
+                   for xidx in range(d.shape[0])], cmap=cmap, norm=norm)
+        for spine in plt.gca().spines.values():
+            spine.set_visible(False)
+        plt.tick_params(top='off', bottom='off', left='off', right='off', labelleft='off',
+                        labelbottom='off', labeltop='off')
         plt.show()
 
-    return features[:-1]  # discard outer rim
+    return features[:-1]
 
 
 def main(args):
@@ -140,6 +176,20 @@ def main(args):
         d = json.load(f)
     print("... done")
 
+    # Read in gt labels from csv.
+    print("Reading in robo ground truth labels from '" + args.gt_infile + "'...")
+    df = pd.read_csv(args.gt_infile)
+    gt_labels = {p: {} for p in preps}
+    l2c = {"Y": 1, "N": 0}  # toss out 'M' data; note this means Y is class 1 not class 2
+    for idx in df.index:
+        k = '(' + ', '.join(df["pair"][idx].split(' + ')) + ')'
+        for p in preps:
+            if df[p][idx] in l2c:
+                gt_labels[p][k] = l2c[df[p][idx]]
+        if k in gt_labels["in"] and gt_labels["in"][k] == 1:  # DEBUG: test whether 'in'/'on' exclusivity helps
+            gt_labels["on"][k] = 0  # DEBUG
+    print("... done")
+
     # Get training and testing data.
     feats = {f: {p: {} for p in preps} for f in folds}
     labels = {f: {p: {} for p in preps} for f in folds}
@@ -148,25 +198,41 @@ def main(args):
         num_pairs = {f: 0 for f in folds}
         avg_trials = {f: 0 for f in folds}
         for k in d.keys():
-            ob1n, ob2n = k[1:-2].split(',')
-            ob1 = names.index(robo_data_ob_name_converter(ob1n.strip()))
-            ob2 = names.index(robo_data_ob_name_converter(ob2n.strip()))
-            for f in folds:
-                for idx in range(len(all_d["folds"][f][p]["ob1"])):
-                    if ob1 == all_d["folds"][f][p]["ob1"][idx] and ob2 == all_d["folds"][f][p]["ob2"][idx]:
-                        for trial in d[k].keys():
-                            if ob1 not in feats[f][p]:
-                                feats[f][p][ob1] = {}
-                                labels[f][p][ob1] = {}
-                            if ob2 not in feats[f][p][ob1]:
-                                feats[f][p][ob1][ob2] = []
-                            feats[f][p][ob1][ob2].append(depthmaps_to_features(d[k][trial]['t0_depthmap'],
-                                                                               d[k][trial]['t1_depthmap'],
-                                                                               d[k][trial]['center_point'],
-                                                                               15, verbose=False))
-                            labels[f][p][ob1][ob2] = all_d["folds"][f][p]["label"][idx]
-                        num_pairs[f] += 1
-                        avg_trials[f] += len(d[k].keys())
+            if k in gt_labels[p]:
+                ob1n, ob2n = k[1:-2].split(',')
+                ob1 = names.index(robo_data_ob_name_converter(ob1n.strip()))
+                ob2 = names.index(robo_data_ob_name_converter(ob2n.strip()))
+                for f in folds:
+                    for idx in range(len(all_d["folds"][f][p]["ob1"])):
+                        if ob1 == all_d["folds"][f][p]["ob1"][idx] and ob2 == all_d["folds"][f][p]["ob2"][idx]:
+                            for trial in d[k].keys():
+                                if ob1 not in feats[f][p]:
+                                    feats[f][p][ob1] = {}
+                                    labels[f][p][ob1] = {}
+                                if ob2 not in feats[f][p][ob1]:
+                                    feats[f][p][ob1][ob2] = []
+                                verbose = False
+                                # if k == "(016_pear, 065-a_cups)" or k == "(052_extra_large_clamp, 065-i_cups)":
+                                #     verbose = True  # DEBUG  # Figure for examples
+                                # if gt_labels["on"][k] == 0 and gt_labels["in"][k] == 0:
+                                #     verbose = True  # DEBUG
+                                # Examples for cherry/lemon
+                                # if (k == "(011_banana, 065-e_cups)" or  # MM says 1, robo says 0 (correct)
+                                #         k == "(063-f_marbles, 003_cracker_box)" or  # MM says 2, robo says 0 (correct)
+                                #         k == "(065-e_cups, 023_wine_glass)" or  # Robot says 2 (correct), MM 0
+                                #         k == "(004_sugar_box, 065-e_cups)"):  # Robot says 2, MM 0 (correct)
+                                #     verbose = True
+                                if verbose:
+                                    print(k)  # DEBUG
+
+                                feats[f][p][ob1][ob2].append(depthmaps_to_features(d[k][trial]['t0_depthmap'],
+                                                                                   d[k][trial]['t1_depthmap'],
+                                                                                   d[k][trial]['center_point'],
+                                                                                   15, rad_before=False,
+                                                                                   verbose=verbose))
+                                labels[f][p][ob1][ob2] = gt_labels[p][k]
+                            num_pairs[f] += 1
+                            avg_trials[f] += len(d[k].keys())
         for f in folds:
             avg_trials[f] /= float(num_pairs[f]) if num_pairs[f] > 0 else 1
             print("... for '" + f + "', got " + str(num_pairs[f]) + " pairs with avg " +
@@ -194,6 +260,8 @@ if __name__ == "__main__":
                         help="input json file with train/dev/test split")
     parser.add_argument('--features_infile', type=str, required=True,
                         help="input json from rosbag processing")
+    parser.add_argument('--gt_infile', type=str, required=True,
+                        help="input csv of ground truth affordance labels")
     parser.add_argument('--features_outfile', type=str, required=True,
                         help="output json mapping object pairs to dropping behavior feature vectors")
     main(parser.parse_args())

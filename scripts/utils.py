@@ -13,17 +13,23 @@ def get_acc(cm):
 
 # Get f1 from a confusion matrix, averaging the "real" classes' f1 scores and ignoring the "maybe" class f1.
 # cm - a 3x3 confusion matrix with class 1 representing "maybe"/"undecided"
+# cm - a 2x2 confusion matrix with class 0 N and class 1 Y
 def get_f1(cm):
-    if cm.shape != (3, 3):
-        return None
-    tp = cm[0, 0] + cm[2, 2]  # true positives for Y/N labels
-    decided_y_n = np.sum(cm[:, 0]) + np.sum(cm[:, 2])
-    if decided_y_n > 0:
-        p = tp / decided_y_n  # precision when we decided to say Y or N
+    if cm.shape == (2, 2):
+        tp = cm[1, 1]
+        p = tp / np.sum(cm[:, 1])
+        r = tp / np.sum(cm[1, :])
+    elif cm.shape == (3, 3):
+        tp = cm[0, 0] + cm[2, 2]  # true positives for Y/N labels
+        decided_y_n = np.sum(cm[:, 0]) + np.sum(cm[:, 2])
+        if decided_y_n > 0:
+            p = tp / decided_y_n  # precision when we decided to say Y or N
+        else:
+            p = 0  # set precision to zero (truly it is "undefined" since we labeled everything "maybe")
+        # We don't need this check for recall, since we know the true labels are not all clustered on "maybe"
+        r = tp / (np.sum(cm[0, :]) + np.sum(cm[2, :]))  # recall when the true label was Y or N
     else:
-        p = 0  # set precision to zero (truly it is "undefined" since we labeled everything "maybe")
-    # We don't need this check for recall, since we know the true labels are not all clustered on "maybe"
-    r = tp / (np.sum(cm[0, :]) + np.sum(cm[2, :]))  # recall when the true label was Y or N
+        raise ValueError
     if p + r > 0:  # if tp = 0, this can happen
         f = (2 * p * r) / (p + r)  # harmonic mean of Y/N-based precision and recall
     else:
@@ -139,6 +145,7 @@ def get_classes_by_vote(tf, p):
 # Assumes classes are numbered as 0, 1, ..., N
 # tf - trial features, a list of lists of per-trial features
 # p - a list of class predictions on a per-trial basis
+# num_classes - if 3, calculates as-is; if 2, assumes 0 -> 0, 1 -> 2, and introduces a new class 1 with no votes
 # returns - a list of size len(tf) of list of class vote softmax over trials
 def get_softmax_by_vote(tf, p, num_classes):
     pidx = 0
@@ -146,5 +153,7 @@ def get_softmax_by_vote(tf, p, num_classes):
     for idx in range(len(tf)):
         class_votes = Counter(p[pidx:pidx + len(tf[idx])])
         c.append(np.asarray([class_votes[cidx] / float(len(tf[idx])) for cidx in range(num_classes)]))
+        if num_classes == 2:  # insert a 0 vote 'maybe' between no/yes counts
+            c[-1] = np.insert(c[-1], 1, 0)
         pidx += len(tf[idx])
     return c

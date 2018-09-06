@@ -12,18 +12,18 @@ from scipy.stats import ttest_ind
 def main(args):
 
     preps = ["on", "in"]
-<<<<<<< HEAD
-    models = ["bow", "glove", "resnet", "mmS"]
-    models_baseline_names = ["nn_bow", "glove", "resnet", "glove+resnetS"]
+    if args.robot == 1:
+        models = ["mmS", "mmS+robot"]
+        models_baseline_names = ["glove+resnetS", "glove+resnetS+robot"]
+        folds = ["train", "dev", "test"]
+    else:
+        models = ["bow", "glove", "resnet", "mmS"]
+        models_baseline_names = ["nn_bow", "glove", "resnet", "glove+resnetS"]
+        folds = ["train", "dev", "test"]
     metric = "acc"
-    folds = ["train", "dev", "test"]
     test_accs = {p: [None for midx in range(len(models))] for p in preps}
-=======
-    models = ["bow", "glove", "resnet", "mm"]
-    models_baseline_names = ["nn_bow", "glove", "resnet", "glove+resnet"]
-    metric = "acc"
-    folds = ["train", "dev", "test"]
->>>>>>> b45f75e50f56c5f4cbc18f51edf59e9f5042a889
+    test_type = "test_robot" if args.robot == 1 else "test"
+
     for p in preps:
 
         # From results directory, check whether test set performance is missing and run those models if so.
@@ -31,7 +31,7 @@ def main(args):
         for _, _, files in os.walk(args.results_dir):
             for fn in files:
                 fnps = fn.split('.')
-                if len(fnps) == 4 and fnps[1] == p and fnps[2] == metric and fnps[0] in models and fnps[3] == 'test':
+                if len(fnps) == 4 and fnps[1] == p and fnps[2] == metric and fnps[0] in models and fnps[3] == test_type:
                     m = fnps[0]
                     test_run[models.index(m)] = True
         for midx in range(len(models)):
@@ -50,10 +50,14 @@ def main(args):
                        " --hyperparam_infile " + os.path.join(args.hyperparam_dir +
                                                               '.'.join([models[midx], p, metric, "best"])) +
                        " --perf_outfile " + os.path.join(args.results_dir +
-                                                         '.'.join([models[midx], p, metric, "test"])) +
-                       " --ff_random_restarts " + args.ff_random_restarts +
-                       " --test 1")
-                print("running test for '" + models[midx] + "' on task '" + p + "'...")
+                                                         '.'.join([models[midx], p, metric, test_type])) +
+                       " --ff_random_restarts " + args.ff_random_restarts)
+                if args.robot:
+                    cmd += " --test_robot 1"
+                    cmd += " --robot_infile " + args.robot_infile
+                else:
+                    cmd += " --test 1"
+                print("running " + test_type + " for '" + models[midx] + "' on task '" + p + "'...")
                 print("command: '" + cmd + "'")
                 os.system(cmd)  # blocking call
                 print("... done")
@@ -72,7 +76,7 @@ def main(args):
                         train_metric = d[0][p]["tr_" + metric]
                         results['train'][models.index(m)] = train_metric
                         results['dev'][models.index(m)] = dev_metric
-                    elif fnps[3] == 'test':  # this contains test and (train+dev) results
+                    elif fnps[3] == test_type:  # this contains test and (train+dev) results
                         with open(os.path.join(args.results_dir, fn), 'r') as f:
                             d = json.load(f)
                         test_metric = d[0][p][metric]
@@ -84,7 +88,7 @@ def main(args):
             print("\t" + f + ":")
             for midx in range(len(models)):
                 if results[f][midx] is None:
-                    print("\t\tWARNING: no results yet for '" + models[midx] + "'")
+                    print("\t\tWARNING: no results yet for '" + models[midx] + "' on fold " + f)
                     continue
                 print("\t\t" + models[midx] + "\t%0.3f" % np.average(results[f][midx]) +
                       " +/- %0.3f" % np.std(results[f][midx]))
@@ -105,7 +109,7 @@ def main(args):
                     _, pv = ttest_ind(results[f][midx], results[f][mjdx], equal_var=equal_var)
                     pv_m[midx][mjdx] = pv
                     pv_m[mjdx][midx] = pv
-                sig[midx] = np.all([pv_m[midx][mjdx] < pvt or pv_m[midx][mjdx] is None
+                sig[midx] = np.all([pv_m[midx][mjdx] is None or pv_m[midx][mjdx] < pvt
                                     for mjdx in range(len(models)) if mjdx != midx])
             print("\t" + f + ":")
             print("\t\t" + "\t".join(models))
@@ -115,20 +119,17 @@ def main(args):
                 if sig[midx]:
                     print("\t\tmodel '" + models[midx] + "' differs from others with p < " + str(pvt))
 
-<<<<<<< HEAD
         for midx in range(len(models)):
             test_accs[p][midx] = results["test"][midx]
 
     # Print test acc harmonic means
-    print("harmonic means of test accuracies across tasks:")
+    print("harmonic means of " + test_type + " accuracies across tasks:")
     for midx in range(len(models)):
         means = [2 * (test_accs["on"][midx][idx] * test_accs["in"][midx][idx]) /
                  (test_accs["on"][midx][idx] + test_accs["in"][midx][idx])
                  for idx in range(len(test_accs["on"][midx]))]
         print("\t\t" + models[midx] + "\t%0.3f" % np.average(means) + " +/- %0.3f" % np.std(means))
 
-=======
->>>>>>> b45f75e50f56c5f4cbc18f51edf59e9f5042a889
 
 if __name__ == "__main__":
 
@@ -145,4 +146,8 @@ if __name__ == "__main__":
                         help="directory for model performance")
     parser.add_argument('--ff_random_restarts', type=str, required=False,
                         help="comma-separated list of random seeds to use")
+    parser.add_argument('--robot', type=int, required=False,
+                        help="whether to test on the robot subset of data")
+    parser.add_argument('--robot_infile', type=str, required=False,
+                        help="robot feature data filename")
     main(parser.parse_args())
