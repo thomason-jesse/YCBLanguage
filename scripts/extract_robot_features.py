@@ -116,15 +116,18 @@ def depthmap_to_radial(d, pooled_origin, num_feats, grade, verbose=False):
 # depth change between time 0 and time 1 in that band. If num_feats=1, the average is over the entire depth map.
 # If num_feats>1, bands extend outwards from the origin, evenly spaced by radius to the border. Cells closer to
 # the border than to a radial band centerline will be discarded (e.g., cells outside the normalized unit circle).
-def depthmaps_to_features(d0, d1, raw_origin, num_feats, verbose=False, rad_before=False):
-    t1dm = np.asmatrix(d1)
-    t0dm = np.asmatrix(d0)
+def depthmaps_to_features(raw_origin, num_feats, verbose=False,
+                          rad_before=False, d0=None, d1=None, d=None):
+    assert (rad_before and d0 is not None and d1 is not None) or (not rad_before and d is not None)
+
     grade = 255  # for verbose, how many distinct shades of to use (lower means higher contrast)
     pooled_origin = [dim / 10. for dim in raw_origin]
     pooled_origin = [pooled_origin[1], pooled_origin[0]]  # (coord x,y have to be swapped; Rosario might fix)
 
-    d = t1dm - t0dm
     if rad_before:
+        t1dm = np.asmatrix(d1)
+        t0dm = np.asmatrix(d0)
+        d = t1dm - t0dm
         features_d0, _, _, _, _ = depthmap_to_radial(t0dm, pooled_origin, num_feats, grade, verbose=verbose)
         features_d1, cells_by_feature, cell_to_feature, _, _ = depthmap_to_radial(t1dm, pooled_origin, num_feats, grade,
                                                                             verbose=verbose)
@@ -225,11 +228,22 @@ def main(args):
                                 if verbose:
                                     print(k)  # DEBUG
 
-                                feats[f][p][ob1][ob2].append(depthmaps_to_features(d[k][trial]['t0_depthmap'],
-                                                                                   d[k][trial]['t1_depthmap'],
-                                                                                   d[k][trial]['center_point'],
-                                                                                   15, rad_before=False,
-                                                                                   verbose=verbose))
+                                # Depth features
+                                t1dm = np.asmatrix(d[k][trial]['t1_depthmap'])
+                                t0dm = np.asmatrix(d[k][trial]['t0_depthmap'])
+                                dd = t1dm - t0dm
+                                feats[f][p][ob1][ob2].append(depthmaps_to_features(d[k][trial]['center_point'],
+                                                                                   15, verbose=verbose,
+                                                                                   rad_before=False, d=dd))
+
+                                # RGB features
+                                t1cm = np.asarray(d[k][trial]['t1_rgbmap'])
+                                t0cm = np.asarray(d[k][trial]['t0_rgbmap'])
+                                dc = np.linalg.norm(t1cm - t0cm, axis=0)
+                                feats[f][p][ob1][ob2].append(depthmaps_to_features(d[k][trial]['center_point'],
+                                                                                   15, verbose=verbose,
+                                                                                   rad_before=False, d=dc))
+
                                 labels[f][p][ob1][ob2] = gt_labels[p][k]
                             num_pairs[f] += 1
                             avg_trials[f] += len(d[k].keys())
