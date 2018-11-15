@@ -10,6 +10,7 @@ from models import *
 from sklearn.naive_bayes import GaussianNB
 from torchvision.models import resnet
 from torchvision.transforms import ToTensor
+from torchvision.transforms import Normalize
 from torchvision.transforms.functional import resize
 from utils import *
 
@@ -331,6 +332,8 @@ def main(args, dv):
     # Average BoW embeddings use to predict class.
     idx_to_v = None
     emb_dim_v = None
+    # https://github.com/pytorch/examples/blob/42e5b996718797e45c46a25c55b031e6768f8440/imagenet/main.py#L89-L101
+    normalize = Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])  # bc of imagenet pretraining
     if args.baseline is None or 'resnet' in args.baseline:
         print("Preparing infrastructure to run ResNet-based feed forward model...")
         idx_to_v = {}
@@ -348,6 +351,7 @@ def main(args, dv):
                 pil = Image.open(imgs[idx])
                 pil = resize(pil, (224, 244))
                 im = tt(pil)
+                im = normalize(im)
                 im = torch.unsqueeze(im, 0)
                 idx_to_v[idx] = plm(im).detach().data.numpy().flatten()
                 with open(ffn, 'w') as f:
