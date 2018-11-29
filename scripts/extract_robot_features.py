@@ -14,6 +14,7 @@ import argparse
 import json
 import matplotlib.pyplot as plt
 import numpy as np
+import os
 import pandas as pd
 from matplotlib import colors
 
@@ -53,6 +54,9 @@ def robo_data_ob_name_converter(n):
         n = n[:-7] + "_marbles"
     if n[-7:] == "_padloc":
         n = n[:-7] + "_padlock"
+    if n[-7:] == "_soccer":
+        n = n[:-7] + "_soccer_ball"
+    n = n.replace('philips', 'phillips')
     return n
 
 
@@ -163,6 +167,7 @@ def depthmaps_to_features(raw_origin, num_feats, verbose=False,
 
 
 def main(args):
+    assert args.features_infile is not None or args.features_indir is not None
 
     # Read in labeled folds.
     print("Reading in labeled folds from '" + args.splits_infile + "'...")
@@ -174,10 +179,28 @@ def main(args):
     print("... done")
 
     # Read in data from robo drop.
-    print("Reading in robo dropping behavior data from '" + args.features_infile + "'...")
-    with open(args.features_infile, 'r') as f:
-        d = json.load(f)
-    print("... done")
+    if args.features_indir is None:
+        fns = [args.features_infile]
+    else:
+        fns = []
+        for _, _, files in os.walk(args.features_indir):
+            for fn in files:
+                if fn.split('.')[-1] == 'json':
+                    fns.append(os.path.join(args.features_indir, fn))
+    d = {}
+    for fn in fns:
+        print("Reading in robo dropping behavior data from '" + fn + "'...")
+        with open(fn, 'r') as f:
+            _d = json.load(f)
+            for k in _d.keys():
+                if k not in d:
+                    # print("... added new key '" + k + "' with " + str(len(_d[k])) + " entries")
+                    d[k] = _d[k]
+                else:
+                    # print("... extending existing key '" + k + "' with " + str(len(_d[k])) + " entries")
+                    d[k].extend(_d[k])
+        print("... done; added entries from " + str(len(_d.keys())) + " keys")
+    print("... total data keys: " + str(len(d)))
 
     # Read in gt labels from csv.
     print("Reading in robo ground truth labels from '" + args.gt_infile + "'...")
@@ -200,57 +223,69 @@ def main(args):
         print("Collating available train/test data for '" + p + "'...")
         num_pairs = {f: 0 for f in folds}
         avg_trials = {f: 0 for f in folds}
+        pair_not_in_gt = {f: 0 for f in folds}
+        pair_assigned_to_fold = {k: None for k in d}
         for k in d.keys():
             if k in gt_labels[p]:
-                ob1n, ob2n = k[1:-2].split(',')
-                ob1 = names.index(robo_data_ob_name_converter(ob1n.strip()))
-                ob2 = names.index(robo_data_ob_name_converter(ob2n.strip()))
-                for f in folds:
-                    for idx in range(len(all_d["folds"][f][p]["ob1"])):
-                        if ob1 == all_d["folds"][f][p]["ob1"][idx] and ob2 == all_d["folds"][f][p]["ob2"][idx]:
-                            for trial in d[k].keys():
-                                if ob1 not in feats[f][p]:
-                                    feats[f][p][ob1] = {}
-                                    labels[f][p][ob1] = {}
-                                if ob2 not in feats[f][p][ob1]:
-                                    feats[f][p][ob1][ob2] = []
-                                verbose = False
-                                # if k == "(016_pear, 065-a_cups)" or k == "(052_extra_large_clamp, 065-i_cups)":
-                                #     verbose = True  # DEBUG  # Figure for examples
-                                # if gt_labels["on"][k] == 0 and gt_labels["in"][k] == 0:
-                                #     verbose = True  # DEBUG
-                                # Examples for cherry/lemon
-                                # if (k == "(011_banana, 065-e_cups)" or  # MM says 1, robo says 0 (correct)
-                                #         k == "(063-f_marbles, 003_cracker_box)" or  # MM says 2, robo says 0 (correct)
-                                #         k == "(065-e_cups, 023_wine_glass)" or  # Robot says 2 (correct), MM 0
-                                #         k == "(004_sugar_box, 065-e_cups)"):  # Robot says 2, MM 0 (correct)
-                                #     verbose = True
-                                if verbose:
-                                    print(k)  # DEBUG
+                gt = gt_labels[p][k]
+            else:
+                gt = None  # get from all_d
+            ob1n, ob2n = k[1:-2].split(',')
+            ob1 = names.index(robo_data_ob_name_converter(ob1n.strip()))
+            ob2 = names.index(robo_data_ob_name_converter(ob2n.strip()))
+            for f in folds:
+                for idx in range(len(all_d["folds"][f][p]["ob1"])):
+                    if ob1 == all_d["folds"][f][p]["ob1"][idx] and ob2 == all_d["folds"][f][p]["ob2"][idx]:
+                        if pair_assigned_to_fold[k] is not None:
+                            print("WARNING: pair '" + k + "' previously assigned to fold '"
+                                  + pair_assigned_to_fold[k] + "' now in '" + f + "'")
+                        pair_assigned_to_fold[k] = f
+                        for trial in d[k].keys():
+                            if ob1 not in feats[f][p]:
+                                feats[f][p][ob1] = {}
+                                labels[f][p][ob1] = {}
+                            if ob2 not in feats[f][p][ob1]:
+                                feats[f][p][ob1][ob2] = []
+                            verbose = False
+                            # if k == "(016_pear, 065-a_cups)" or k == "(052_extra_large_clamp, 065-i_cups)":
+                            #     verbose = True  # DEBUG  # Figure for examples
+                            # if gt_labels["on"][k] == 0 and gt_labels["in"][k] == 0:
+                            #     verbose = True  # DEBUG
+                            # Examples for cherry/lemon
+                            # if (k == "(011_banana, 065-e_cups)" or  # MM says 1, robo says 0 (correct)
+                            #         k == "(063-f_marbles, 003_cracker_box)" or  # MM says 2, robo says 0 (correct)
+                            #         k == "(065-e_cups, 023_wine_glass)" or  # Robot says 2 (correct), MM 0
+                            #         k == "(004_sugar_box, 065-e_cups)"):  # Robot says 2, MM 0 (correct)
+                            #     verbose = True
+                            if verbose:
+                                print(k)  # DEBUG
 
-                                # Depth features
-                                t1dm = np.asmatrix(d[k][trial]['t1_depthmap'])
-                                t0dm = np.asmatrix(d[k][trial]['t0_depthmap'])
-                                dd = t1dm - t0dm
-                                feats[f][p][ob1][ob2].append(depthmaps_to_features(d[k][trial]['center_point'],
-                                                                                   15, verbose=verbose,
-                                                                                   rad_before=False, d=dd))
+                            # Depth features
+                            t1dm = np.asmatrix(d[k][trial]['t1_depthmap'])
+                            t0dm = np.asmatrix(d[k][trial]['t0_depthmap'])
+                            dd = t1dm - t0dm
+                            feats[f][p][ob1][ob2].append(depthmaps_to_features(d[k][trial]['center_point'],
+                                                                               15, verbose=verbose,
+                                                                               rad_before=False, d=dd))
 
-                                # RGB features
-                                t1cm = np.asarray(d[k][trial]['t1_rgbmap'])
-                                t0cm = np.asarray(d[k][trial]['t0_rgbmap'])
-                                dc = np.linalg.norm(t1cm - t0cm, axis=0)
-                                feats[f][p][ob1][ob2].append(depthmaps_to_features(d[k][trial]['center_point'],
-                                                                                   15, verbose=verbose,
-                                                                                   rad_before=False, d=dc))
+                            # RGB features
+                            t1cm = np.asarray(d[k][trial]['t1_rgbmap'])
+                            t0cm = np.asarray(d[k][trial]['t0_rgbmap'])
+                            dc = np.linalg.norm(t1cm - t0cm, axis=0)
+                            feats[f][p][ob1][ob2].append(depthmaps_to_features(d[k][trial]['center_point'],
+                                                                               15, verbose=verbose,
+                                                                               rad_before=False, d=dc))
 
-                                labels[f][p][ob1][ob2] = gt_labels[p][k]
-                            num_pairs[f] += 1
-                            avg_trials[f] += len(d[k].keys())
+                            if gt is None:
+                                pair_not_in_gt[f] += 1
+                                gt = all_d["folds"][f][p]["label"][idx]
+                            labels[f][p][ob1][ob2] = gt
+                        num_pairs[f] += 1
+                        avg_trials[f] += len(d[k].keys())
         for f in folds:
             avg_trials[f] /= float(num_pairs[f]) if num_pairs[f] > 0 else 1
             print("... for '" + f + "', got " + str(num_pairs[f]) + " pairs with avg " +
-                  str(avg_trials[f]) + " trials")
+                  str(avg_trials[f]) + " trials (" + str(pair_not_in_gt[f]) + " lack gt)")
     print("... done")
 
     # Write out extracted features in label-file parallel format.
@@ -272,8 +307,10 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--splits_infile', type=str, required=True,
                         help="input json file with train/dev/test split")
-    parser.add_argument('--features_infile', type=str, required=True,
+    parser.add_argument('--features_infile', type=str, required=False,
                         help="input json from rosbag processing")
+    parser.add_argument('--features_indir', type=str, required=False,
+                        help="input dir containing input jsons from rosbag processing")
     parser.add_argument('--gt_infile', type=str, required=True,
                         help="input csv of ground truth affordance labels")
     parser.add_argument('--features_outfile', type=str, required=True,
