@@ -108,6 +108,8 @@ def get_glove_vectors(fn, ws):
             if w == "unk":
                 unk_v = np.array([float(n) for n in p[1:]])
     m = 0
+    if unk_v is None:
+        print("WARNING: found no UNK vector in GloVe data")
     for w in ws:
         if w not in g:
             m += 1

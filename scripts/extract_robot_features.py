@@ -60,12 +60,17 @@ def robo_data_ob_name_converter(n):
     return n
 
 
-def depthmap_to_radial(d, pooled_origin, num_feats, grade, verbose=False):
-    # avg_depth = np.average(d)
-    # d -= avg_depth  # move average depth change towards 0 to normalize against camera height differences
+def normalize_d(d):
     max_spread = max(abs(np.max(d)), abs(np.min(d)))
     d = d / max_spread  # normalize depth_delta to [-1, 1] with 0 expected no change
     d = (d + 1) / 2  # normalize depth_delta to [0, 1] with 0.5 expected no change
+    return d
+
+
+def depthmap_to_radial(d, pooled_origin, num_feats, grade, verbose=False):
+    # avg_depth = np.average(d)
+    # d -= avg_depth  # move average depth change towards 0 to normalize against camera height differences
+    d = normalize_d(d)
 
     # Visualize raw depth changes.
     if verbose:
@@ -219,6 +224,7 @@ def main(args):
     # Get training and testing data.
     feats = {f: {p: {} for p in preps} for f in folds}
     labels = {f: {p: {} for p in preps} for f in folds}
+    rgbd_feats = {f: {} for f in folds}  # fold, ob1, ob2, [rgb, depth] feature input maps
     for p in preps:
         print("Collating available train/test data for '" + p + "'...")
         num_pairs = {f: 0 for f in folds}
@@ -280,6 +286,17 @@ def main(args):
                                 pair_not_in_gt[f] += 1
                                 gt = all_d["folds"][f][p]["label"][idx]
                             labels[f][p][ob1][ob2] = gt
+
+                            # RGBD features.
+                            if ob1 not in rgbd_feats[f]:
+                                rgbd_feats[f][int(ob1)] = {}
+                            if ob2 not in rgbd_feats[f][ob1]:
+                                # Unnormalized distance between final and initial image in RGB and depth space.
+                                # For depth, record features as 1 / (depth delta)
+                                # TODO: some kind of normalization of both RGB and depth data.
+                                rgbd_feats[f][int(ob1)][int(ob2)] = [(t1cm - t0cm).tolist(),
+                                                                     np.expand_dims(1. / dd, axis=0).tolist()]
+
                         num_pairs[f] += 1
                         avg_trials[f] += len(d[k].keys())
         for f in folds:
@@ -289,7 +306,7 @@ def main(args):
     print("... done")
 
     # Write out extracted features in label-file parallel format.
-    print("Preparing output file format and writing to '" + args.features_outfile + "'...")
+    print("Preparing output file format and writing to '" + args.hand_features_outfile + "'...")
     out_d = {f: {p: {"ob1": all_d["folds"][f][p]["ob1"],
                      "ob2": all_d["folds"][f][p]["ob2"],
                      "feats": [feats[f][p][ob1][ob2] if ob1 in feats[f][p] and ob2 in feats[f][p][ob1] else None
@@ -297,8 +314,14 @@ def main(args):
                      "label": [labels[f][p][ob1][ob2] if ob1 in labels[f][p] and ob2 in labels[f][p][ob1] else None
                                 for ob1, ob2 in zip(all_d["folds"][f][p]["ob1"], all_d["folds"][f][p]["ob2"])]
                      } for p in preps} for f in folds}
-    with open(args.features_outfile, 'w') as f:
+    with open(args.hand_features_outfile, 'w') as f:
         json.dump(out_d, f, indent=2)
+    print("... done")
+
+    # Write out RGBD features in object pair format.
+    print("Preparing RGBD output file and writing to '" + args.rgbd_features_outfile + "'...")
+    with open(args.rgbd_features_outfile, 'w') as f:
+        json.dump(rgbd_feats, f)
     print("... done")
 
 
@@ -313,6 +336,8 @@ if __name__ == "__main__":
                         help="input dir containing input jsons from rosbag processing")
     parser.add_argument('--gt_infile', type=str, required=True,
                         help="input csv of ground truth affordance labels")
-    parser.add_argument('--features_outfile', type=str, required=True,
-                        help="output json mapping object pairs to dropping behavior feature vectors")
+    parser.add_argument('--hand_features_outfile', type=str, required=True,
+                        help="output json mapping object pairs to dropping behavior hand-crafted feature vectors")
+    parser.add_argument('--rgbd_features_outfile', type=str, required=True,
+                        help="output json mapping object pairs to their rgbd features")
     main(parser.parse_args())

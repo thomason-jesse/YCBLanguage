@@ -404,3 +404,73 @@ class EarlyFusionFFModel(nn.Module):
         logits = ff_inputs[-1]
 
         return logits
+
+
+class ConvFFModel(nn.Module):
+
+    # TODO: Tie this to general EarlyFusionModel instead of using directly for prediction (to use with L, V)
+    def __init__(self, dv, conv_inputs, conv_inputs_size, num_classes):
+        super(ConvFFModel, self).__init__()
+        self.conv_inputs = conv_inputs
+        self.out = torch.nn.Linear(conv_inputs_size, num_classes).to(dv)
+        self.param_list = list(self.out.parameters())
+        for m in self.conv_inputs:
+            self.param_list.extend(list(m.parameters()))
+
+    def forward(self, ins):
+        hcat = self.conv_inputs[0](ins[0])
+        for idx in range(1, len(self.conv_inputs)):
+            hcat = torch.cat((hcat, self.conv_inputs[idx](ins[idx])), 1)
+        logits = self.out(hcat)
+        return logits
+
+
+class ConvToLinearModel(nn.Module):
+
+    def __init__(self, dv, channels, hidden_dim):
+        super(ConvToLinearModel, self).__init__()
+        out_channels_factor = 2
+        kernel = (3, 3)
+        stride = (3, 3)
+        self.enc1 = torch.nn.Conv2d(channels, out_channels_factor * channels, kernel, stride=1).to(dv)
+        self.mp1 = torch.nn.MaxPool2d(kernel, stride=stride).to(dv)
+        self.relu1 = torch.nn.ReLU().to(dv)
+        self.enc2 = torch.nn.Conv2d(out_channels_factor * channels,
+                                    channels * out_channels_factor * out_channels_factor,
+                                    kernel).to(dv)
+        self.mp2 = torch.nn.MaxPool2d(kernel, stride=stride).to(dv)
+        self.relu2 = torch.nn.ReLU().to(dv)
+        self.enc3 = torch.nn.Conv2d(channels * out_channels_factor * out_channels_factor,
+                                    channels * out_channels_factor * out_channels_factor * out_channels_factor,
+                                    kernel).to(dv)
+        self.mp3 = torch.nn.MaxPool2d(kernel, stride=stride, padding=1).to(dv)
+        self.relu3 = torch.nn.ReLU().to(dv)
+        self.conv_out_dim = [1, 2]  # Output dimensions from final max pool.
+        self.final_output_channels = channels * out_channels_factor * out_channels_factor * out_channels_factor
+        self.fc = torch.nn.Linear(self.conv_out_dim[0] * self.conv_out_dim[1] *
+                                  self.final_output_channels,
+                                  hidden_dim).to(dv)
+
+    def forward(self, im):
+
+        # print("im\t" + str(im.shape))  # DEBUG
+        eim = self.enc1(im)
+        # print("enc1\t" + str(eim.shape))  # DEBUG
+        eim = self.mp1(eim)
+        # print("mp1\t" + str(eim.shape))  # DEBUG
+        eim = self.relu1(eim)
+        eim = self.enc2(eim)
+        # print("enc2\t" + str(eim.shape))  # DEBUG
+        eim = self.mp2(eim)
+        # print("mp2\t" + str(eim.shape))  # DEBUG
+        eim = self.relu2(eim)
+        eim = self.enc3(eim)
+        # print("enc3\t" + str(eim.shape))  # DEBUG
+        eim = self.mp3(eim)
+        eim = self.relu3(eim)
+        # print("mp3\t" + str(eim.shape))  # DEBUG
+        fc_in = eim.view((im.shape[0], self.final_output_channels * self.conv_out_dim[0] * self.conv_out_dim[1]))
+        # print("view\t" + str(fc_in.shape))  # DEBUG
+        h = self.fc(fc_in)
+
+        return h
