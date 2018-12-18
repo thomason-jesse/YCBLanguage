@@ -56,6 +56,8 @@ def robo_data_ob_name_converter(n):
         n = n[:-7] + "_padlock"
     if n[-7:] == "_soccer":
         n = n[:-7] + "_soccer_ball"
+    if n[-7:] == "-skille":
+        n = n[:-7] + "-skillet"
     n = n.replace('philips', 'phillips')
     return n
 
@@ -292,10 +294,11 @@ def main(args):
                                 rgbd_feats[f][int(ob1)] = {}
                             if ob2 not in rgbd_feats[f][ob1]:
                                 # Unnormalized distance between final and initial image in RGB and depth space.
-                                # For depth, record features as 1 / (depth delta)
+                                # For depth, record features delta of 1 / depth between final and initial image.
                                 # TODO: some kind of normalization of both RGB and depth data.
                                 rgbd_feats[f][int(ob1)][int(ob2)] = [(t1cm - t0cm).tolist(),
-                                                                     np.expand_dims(1. / dd, axis=0).tolist()]
+                                                                     np.expand_dims((1. / t1dm) - (1. / t0dm),
+                                                                                    axis=0).tolist()]
 
                         num_pairs[f] += 1
                         avg_trials[f] += len(d[k].keys())
