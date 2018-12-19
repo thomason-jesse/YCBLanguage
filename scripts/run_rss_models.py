@@ -5,6 +5,7 @@ __author__ = 'thomason-jesse'
 import argparse
 import json
 import os
+import pandas as pd
 from PIL import Image
 from models import *
 from sklearn.naive_bayes import GaussianNB
@@ -51,7 +52,56 @@ def main(args, dv):
             rgbd_te = rgbd['dev']
     print("... done")
 
+    # Select subset of data on which to evaluate.
+    print("Selecting evaluation data...")
     models = args.models.split(',')
+    available_train = {p: None for p in preps}
+    available_test = {p: None for p in preps}
+    for p in preps:
+        if True or 'rgbd' in models:  # DEBUG
+            available_train[p] = [[ix, train[p]["ob1"][ix], train[p]["ob2"][ix]]
+                                  for ix in range(len(train[p]["ob1"]))
+                                  if str(train[p]["ob1"][ix]) in rgbd_tr and
+                                  str(train[p]["ob2"][ix]) in rgbd_tr[str(train[p]["ob1"][ix])]]
+            available_test[p] = [[ix, test[p]["ob1"][ix], test[p]["ob2"][ix]]
+                                 for ix in range(len(test[p]["ob1"]))
+                                 if str(test[p]["ob1"][ix]) in rgbd_te and
+                                 str(test[p]["ob2"][ix]) in rgbd_te[str(test[p]["ob1"][ix])]]
+            print("... done; %d / %d available training and %d / %d available testing examples with RGBD data for %s" %
+                  (len(available_train[p]), len(train[p]["ob1"]), len(available_test[p]), len(test[p]["ob1"]), p))
+        else:
+            available_train[p] = [[ix, str(train[p]["ob1"][ix]), str(train[p]["ob2"][ix])]
+                                  for ix in range(len(train[p]["ob1"]))]
+            available_test[p] = [[ix, str(test[p]["ob1"][ix]), str(test[p]["ob2"][ix])]
+                                 for ix in range(len(test[p]["ob1"]))]
+            print("... done; %d / %d available training and %d / %d available testing examples for %s" %
+                  (len(available_train[p]), len(train[p]["ob1"]), len(available_test[p]), len(test[p]["ob1"]), p))
+    tr_o = {p: [train[p]["label"][ix] for ix, _, _ in available_train[p]] for p in preps}
+    te_o = {p: [test[p]["label"][ix] for ix, _, _ in available_test[p]] for p in preps}
+
+    # Read in ground truth labels.
+    if args.gt_infile is not None:
+        print("Reading in robo ground truth labels from '" + args.gt_infile + "'...")
+        df = pd.read_csv(args.gt_infile)
+        gt_labels = {p: {} for p in preps}
+        l2c = {"Y": 2, "M": 1, "N": 0}  # Matching 3 class split.
+        for idx in df.index:
+            k = '(' + ', '.join(df["pair"][idx].split(' + ')) + ')'
+            for p in preps:
+                if df[p][idx] in l2c:
+                    gt_labels[p][k] = l2c[df[p][idx]]
+        for p in preps:
+            gt_found = 0
+            for idx in range(len(te_o[p])):
+                key = "(%s, %s)" % (names[test[p]['ob1'][idx]], names[test[p]['ob2'][idx]])
+                if key in gt_labels[p]:
+                    te_o[p][idx] = gt_labels[p][key]
+                    gt_found += 1
+            print("... done; %d / %d ground truth test labels found for %s" % (gt_found, len(te_o[p]), p))
+            if len(te_o[p]) > gt_found:
+                print(
+                    "... WARNING: using human annotations for remaining labels (TODO: annotate remainder of data)")
+
     bs = []
     rs = []
 
@@ -61,9 +111,7 @@ def main(args, dv):
         bs.append("Majority Class")
         rs.append({})
         for p in preps:
-            mc_tr = train[p]["label"]
-            mc_te = train[p]["label"]
-            rs[-1][p] = run_majority_class(mc_tr, mc_te)
+            rs[-1][p] = run_majority_class(tr_o[p], te_o[p])
         print("... done")
 
     # Majority class | object ids baseline.
@@ -73,11 +121,9 @@ def main(args, dv):
         rs.append({})
         fs = [range(len(names)), range(len(names))]  # Two one-hot vectors of which object name was seen.
         for p in preps:
-            tr_f = [[train[p][s][idx] for s in ["ob1", "ob2"]] for idx in
-                    range(len(train[p]["ob1"]))]
-            te_f = [[test[p][s][idx] for s in ["ob1", "ob2"]] for idx in
-                    range(len(test[p]["ob1"]))]
-            rs[-1][p] = run_cat_naive_bayes(fs, tr_f, train[p]["label"], te_f, test[p]["label"], verbose=args.verbose)
+            tr_f = [[oidx, ojdx] for _, oidx, ojdx in available_train[p]]
+            te_f = [[oidx, ojdx] for _, oidx, ojdx in available_test[p]]
+            rs[-1][p] = run_cat_naive_bayes(fs, tr_f, tr_o[p], te_f, te_o[p], verbose=args.verbose)
         print("... done")
 
     # Read in hyperparameters for feed forward networks or set defaults.
@@ -106,36 +152,23 @@ def main(args, dv):
         rs.append({})
         for p in preps:
 
-            available_train = [[ix, str(train[p]["ob1"][ix]), str(train[p]["ob2"][ix])]
-                               for ix in range(len(train[p]["ob1"]))
-                               if str(train[p]["ob1"][ix]) in rgbd_tr and
-                               str(train[p]["ob2"][ix]) in rgbd_tr[str(train[p]["ob1"][ix])]]
-            available_test = [[ix, str(test[p]["ob1"][ix]), str(test[p]["ob2"][ix])]
-                              for ix in range(len(test[p]["ob1"]))
-                              if str(test[p]["ob1"][ix]) in rgbd_te and
-                              str(test[p]["ob2"][ix]) in rgbd_te[str(test[p]["ob1"][ix])]]
-            print("... %d available training and %d available testing examples with RGBD data for %s" %
-                  (len(available_train), len(available_test), p))
-
             # Prepare input to model.
-            tr_f = [rgbd_tr[oidx][ojdx] for _, oidx, ojdx in available_train]
-            te_f = [rgbd_te[oidx][ojdx] for _, oidx, ojdx in available_test]
-            tr_o = [train[p]["label"][ix] for ix, _, _ in available_train]
-            te_o = [test[p]["label"][ix] for ix, _, _ in available_test]
+            tr_f = [rgbd_tr[str(oidx)][str(ojdx)] for _, oidx, ojdx in available_train[p]]
+            te_f = [rgbd_te[str(oidx)][str(ojdx)] for _, oidx, ojdx in available_test[p]]
 
             # Convert structured data into tensor inputs.
             tr_inputs = []
             te_inputs = []
             classes = set()
-            for model_in, orig_in, orig_out in [[tr_inputs, tr_f, tr_o],
-                                                [te_inputs, te_f, te_o]]:
+            for model_in, orig_in, orig_out in [[tr_inputs, tr_f, tr_o[p]],
+                                                [te_inputs, te_f, te_o[p]]]:
                 for idx in range(len(orig_in)):
                     # Convert RGB and D numpy arrays to tensors and add batch dimension at axis 0.
                     model_in.append([torch.tensor(orig_in[idx][0], dtype=torch.float).unsqueeze(0).to(dv),
                                        torch.tensor(orig_in[idx][1], dtype=torch.float).unsqueeze(0).to(dv)])
                     if orig_out[idx] not in classes:
                         classes.add(orig_out[idx])
-            tr_outputs = torch.tensor(tr_o, dtype=torch.long).view(len(tr_o), 1).to(dv)
+            tr_outputs = torch.tensor(tr_o[p], dtype=torch.long).view(len(tr_o[p]), 1).to(dv)
             batch_size = len(tr_inputs)
 
             # Instantiate convolutional RGB and Depth models, then tie them together with a conv FF model.
@@ -186,7 +219,7 @@ def main(args, dv):
                         logits = model(tr_inputs[idx])
                         loss = loss_function(logits, tr_outputs[idx])
                         tloss += loss.data.item()
-                        trcm[train[p]["label"][idx]][logits.max(0)[1]] += 1
+                        trcm[tr_o[p][idx]][logits.max(0)[1]] += 1
 
                         loss.backward()
                         optimizer.step()
@@ -201,7 +234,7 @@ def main(args, dv):
                         cm = np.zeros(shape=(len(classes), len(classes)))
                         for jdx in range(len(te_inputs)):
                             logits = model(te_inputs[jdx])
-                            cm[test[p]["label"][jdx]][logits.max(0)[1]] += 1
+                            cm[te_o[p][jdx]][logits.max(0)[1]] += 1
 
                         acc = get_acc(cm)
                         if best_acc is None or acc > best_acc:
@@ -219,7 +252,6 @@ def main(args, dv):
         print("... done")
 
     # Prep language dictionary.
-    maxlen = tr_enc_exps = te_enc_exps = word_to_i_all = word_to_i = None
     print("Preparing infrastructure to include GloVe info...")
     word_to_i = {}
     word_to_i_all = {}
@@ -228,10 +260,8 @@ def main(args, dv):
     tr_enc_exps = {}
     te_enc_exps = {}
     for p in preps:
-        tr_f = [[res[train[p][s][idx]] for s in ["ob1", "ob2"]] for idx in
-                range(len(train[p]["ob1"]))]
-        te_f = [[res[test[p][s][idx]] for s in ["ob1", "ob2"]] for idx in
-                range(len(test[p]["ob1"]))]
+        tr_f = [[res[oidx], res[ojdx]] for _, oidx, ojdx in available_train[p]]
+        te_f = [[res[oidx], res[ojdx]] for _, oidx, ojdx in available_test[p]]
         word_to_i[p], i_to_word[p], maxlen[p], tr_enc_exps[p], te_enc_exps[p] = make_lang_structures(tr_f, te_f)
         word_to_i_all[p], _, _, _, _ = make_lang_structures(tr_f, te_f, inc_test=True)
     print("... done")
@@ -256,7 +286,7 @@ def main(args, dv):
                 tr_inputs.append([1 if ((i < len(word_to_i[p]) and i in w_in_re_src) or
                                         (i >= len(word_to_i[p]) and i - len(word_to_i[p]) in w_in_re_tar)) else 0
                                   for i in range(len(word_to_i[p]) * 2)])
-                tr_outputs.append(train[p]["label"][idx])
+                tr_outputs.append(tr_o[p][idx])
             te_inputs = []
             for idx in range(len(te_enc_exps[p])):
                 w_in_re_src = set()
@@ -269,7 +299,7 @@ def main(args, dv):
                                        (i >= len(word_to_i[p]) and i - len(word_to_i[p]) in w_in_re_tar)) else 0
                                  for i in range(len(word_to_i[p]) * 2)])
             print("...... done")
-            rs[-1][p] = run_cat_naive_bayes(fs, tr_inputs, train[p]["label"], te_inputs, test[p]["label"],
+            rs[-1][p] = run_cat_naive_bayes(fs, tr_inputs, tr_o[p], te_inputs, te_o[p],
                                             smooth=1, verbose=args.verbose)
         print ("... done")
 
@@ -287,14 +317,12 @@ def main(args, dv):
         bs.append("GLoVe FF")
         rs.append({})
         for p in preps:
-            tr_f = [[res[train[p][s][idx]] for s in ["ob1", "ob2"]] for idx in
-                    range(len(train[p]["ob1"]))]
-            te_f = [[res[test[p][s][idx]] for s in ["ob1", "ob2"]] for idx in
-                    range(len(test[p]["ob1"]))]
+            tr_f = [[res[oidx], res[ojdx]] for _, oidx, ojdx in available_train[p]]
+            te_f = [[res[oidx], res[ojdx]] for _, oidx, ojdx in available_test[p]]
             layers = None if ff_layers == 0 else [int(emb_dim_l / np.power(ff_width_decay, lidx) + 0.5)
                                                   for lidx in range(ff_layers)]
             if ff_random_restarts is None:
-                rs[-1][p] = run_ff_model(dv, [g], [tr_f], train[p]["label"], [te_f], test[p]["label"],
+                rs[-1][p] = run_ff_model(dv, [g], [tr_f], tr_o[p], [te_f], te_o[p],
                                          layers=layers, epochs=ff_epochs, dropout=ff_dropout,
                                          learning_rate=ff_lr, opt=ff_opt, verbose=args.verbose)
             else:
@@ -303,7 +331,7 @@ def main(args, dv):
                     print("... with seed " + str(seed) + "...")
                     np.random.seed(seed)
                     torch.manual_seed(seed)
-                    rs[-1][p].append(run_ff_model(dv, [g], [tr_f], train[p]["label"], [te_f], test[p]["label"],
+                    rs[-1][p].append(run_ff_model(dv, [g], [tr_f], tr_o[p], [te_f], te_o[p],
                                                   layers=layers, epochs=ff_epochs, dropout=ff_dropout,
                                                   learning_rate=ff_lr, opt=ff_opt, verbose=args.verbose))
 
@@ -321,14 +349,12 @@ def main(args, dv):
         bs.append("BoW FF")
         rs.append({})
         for p in preps:
-            tr_f = [[res[train[p][s][idx]] for s in ["ob1", "ob2"]] for idx in
-                    range(len(train[p]["ob1"]))]
-            te_f = [[res[test[p][s][idx]] for s in ["ob1", "ob2"]] for idx in
-                    range(len(test[p]["ob1"]))]
+            tr_f = [[res[oidx], res[ojdx]] for _, oidx, ojdx in available_train[p]]
+            te_f = [[res[oidx], res[ojdx]] for _, oidx, ojdx in available_test[p]]
             layers = None if ff_layers == 0 else [int(emb_dim / np.power(ff_width_decay, lidx) + 0.5)
                                                   for lidx in range(ff_layers)]
             if ff_random_restarts is None:
-                rs[-1][p] = run_ff_model(dv, [wv], [tr_f], train[p]["label"], [te_f], test[p]["label"],
+                rs[-1][p] = run_ff_model(dv, [wv], [tr_f], tr_o[p], [te_f], te_o[p],
                                          layers=layers, epochs=ff_epochs, dropout=ff_dropout,
                                          learning_rate=ff_lr, opt=ff_opt, verbose=args.verbose)
             else:
@@ -337,7 +363,7 @@ def main(args, dv):
                     print("... with seed " + str(seed) + "...")
                     np.random.seed(seed)
                     torch.manual_seed(seed)
-                    rs[-1][p].append(run_ff_model(dv, [wv], [tr_f], train[p]["label"], [te_f], test[p]["label"],
+                    rs[-1][p].append(run_ff_model(dv, [wv], [tr_f], tr_o[p], [te_f], te_o[p],
                                                   layers=layers, epochs=ff_epochs, dropout=ff_dropout,
                                                   learning_rate=ff_lr, opt=ff_opt, verbose=args.verbose))
 
@@ -377,14 +403,15 @@ def main(args, dv):
             # we just make each sequence [[oidx]] for the object idx to be looked up in the dictionary of pre-computed
             # vectors. It doesn't need to be averaged with anything. The double wrapping is because we expect first
             # a list of referring expressions, then a list of words inside each expression.
-            tr_f = [[[[train[p][s][idx]]] for s in ["ob1", "ob2"]] for idx in
-                    range(len(train[p]["ob1"]))]
-            te_f = [[[[test[p][s][idx]]] for s in ["ob1", "ob2"]] for idx in
-                    range(len(test[p]["ob1"]))]
+            # TODO: This will look a little less weird when we have multiple viewpoints per image, in which case each
+            # TODO: object will have multiple image 'tokens' whose embedding is to be looked up as part of the BoW
+            # TODO: that will come to represent the image input.
+            tr_f = [[[[oidx]], [[ojdx]]] for _, oidx, ojdx in available_train[p]]
+            te_f = [[[[oidx]], [[ojdx]]] for _, oidx, ojdx in available_test[p]]
             layers = None if ff_layers == 0 else [int(emb_dim_v / np.power(ff_width_decay, lidx) + 0.5)
                                                   for lidx in range(ff_layers)]
             if ff_random_restarts is None:
-                rs[-1][p] = run_ff_model(dv, [idx_to_v], [tr_f], train[p]["label"], [te_f], test[p]["label"],
+                rs[-1][p] = run_ff_model(dv, [idx_to_v], [tr_f], tr_o[p], [te_f], te_o[p],
                                          layers=layers, epochs=ff_epochs, dropout=ff_dropout,
                                          learning_rate=ff_lr, opt=ff_opt, verbose=args.verbose)
             else:
@@ -393,7 +420,7 @@ def main(args, dv):
                     print("... with seed " + str(seed) + "...")
                     np.random.seed(seed)
                     torch.manual_seed(seed)
-                    rs[-1][p].append(run_ff_model(dv, [idx_to_v], [tr_f], train[p]["label"], [te_f], test[p]["label"],
+                    rs[-1][p].append(run_ff_model(dv, [idx_to_v], [tr_f], tr_o[p], [te_f], te_o[p],
                                                   layers=layers, epochs=ff_epochs, dropout=ff_dropout,
                                                   learning_rate=ff_lr, opt=ff_opt, verbose=args.verbose))
 
@@ -404,22 +431,18 @@ def main(args, dv):
         for p in preps:
 
             # Prepare input to model.
-            tr_f_l = [[res[train[p][s][idx]] for s in ["ob1", "ob2"]] for idx in
-                      range(len(train[p]["ob1"]))]
-            te_f_l = [[res[test[p][s][idx]] for s in ["ob1", "ob2"]] for idx in
-                      range(len(test[p]["ob1"]))]
-            tr_f_v = [[[[train[p][s][idx]]] for s in ["ob1", "ob2"]] for idx in
-                      range(len(train[p]["ob1"]))]
-            te_f_v = [[[[test[p][s][idx]]] for s in ["ob1", "ob2"]] for idx in
-                      range(len(test[p]["ob1"]))]
+            tr_f_l = [[res[oidx], res[ojdx]] for _, oidx, ojdx in available_train[p]]
+            te_f_l = [[res[oidx], res[ojdx]] for _, oidx, ojdx in available_test[p]]
+            tr_f_v = [[[[oidx]], [[ojdx]]] for _, oidx, ojdx in available_train[p]]
+            te_f_v = [[[[oidx]], [[ojdx]]] for _, oidx, ojdx in available_test[p]]
             wv = [g, idx_to_v]
 
             # Convert structured data into tensor inputs.
             tr_inputs = []
             te_inputs = []
             classes = set()
-            for model_in, orig_in, orig_out in [[tr_inputs, [tr_f_l, tr_f_v], train[p]["label"]],
-                                                [te_inputs, [te_f_l, te_f_v], test[p]["label"]]]:
+            for model_in, orig_in, orig_out in [[tr_inputs, [tr_f_l, tr_f_v], tr_o[p]],
+                                                [te_inputs, [te_f_l, te_f_v], te_o[p]]]:
                 for idx in range(len(orig_in[0])):
                     all_in = []
                     for midx in range(len(orig_in)):
@@ -434,7 +457,7 @@ def main(args, dv):
                     model_in.append(all_in)
                     if orig_out[idx] not in classes:
                         classes.add(orig_out[idx])
-            tr_outputs = torch.tensor(train[p]["label"], dtype=torch.long).view(len(train[p]["label"]), 1).to(dv)
+            tr_outputs = torch.tensor(tr_o[p], dtype=torch.long).view(len(tr_o[p]), 1).to(dv)
             batch_size = len(tr_inputs)
 
             # Instantiate model and optimizer.
@@ -483,7 +506,7 @@ def main(args, dv):
                         logits = model(tr_inputs[idx])
                         loss = loss_function(logits.view(1, len(logits)), tr_outputs[idx])
                         tloss += loss.data.item()
-                        trcm[train[p]["label"][idx]][logits.max(0)[1]] += 1
+                        trcm[tr_o[p][idx]][logits.max(0)[1]] += 1
 
                         loss.backward()
                         optimizer.step()
@@ -498,7 +521,7 @@ def main(args, dv):
                         cm = np.zeros(shape=(len(classes), len(classes)))
                         for jdx in range(len(te_inputs)):
                             logits = model(te_inputs[jdx])
-                            cm[test[p]["label"][jdx]][logits.max(0)[1]] += 1
+                            cm[te_o[p][jdx]][logits.max(0)[1]] += 1
 
                         acc = get_acc(cm)
                         if best_acc is None or acc > best_acc:
@@ -581,5 +604,7 @@ if __name__ == "__main__":
                         help="comma-separated list of random seeds to use; presents avg + stddev data instead of cms")
     parser.add_argument('--test', type=int, required=False,
                         help="if set to 1, evaluates on the test set; NOT FOR TUNING")
+    parser.add_argument('--gt_infile', type=str, required=False,
+                        help="input csv of ground truth affordance labels; if provided, overrides dev/test labels")
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     main(parser.parse_args(), device)
