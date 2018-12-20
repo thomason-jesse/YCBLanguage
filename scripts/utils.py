@@ -114,7 +114,7 @@ def get_glove_vectors(fn, ws):
         if w not in g:
             m += 1
             g[w] = unk_v
-    assert set(g.keys()) == ws
+    g['unk'] = unk_v
     return g, m
 
 

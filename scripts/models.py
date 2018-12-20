@@ -217,17 +217,15 @@ def run_lang_2_label(maxlen, word_to_i,
 
 
 # Run a GLoVe-based model (either perceptron or FF network with relu activations)
-# wv - list (by modality) of dictionaries mapping all vocabulary words to their word vectors
-# tr_f - list of feature modalities, indexed then by oidx, each has a list of input lists whose members can be looked
-#        up in the vocabulary to vector dictionary wv
-# tr_l - training labels
-# te_f - same as tr_f but for testing
-# te_l - testing labels
-# layers - a list of hidden widths for a FF network or None to create a linear perceptron
+# tr_inputs - feature vector inputs
+# tr_outputs - training labels
+# te_inputs - same as tr_f but for testing
+# te_outputs - testing labels
 # verbose - whether to print epoch-wise progress
 # Reference: https://github.com/jcjohnson/pytorch-examples/blob/master/nn/two_layer_net_nn.py
-def run_ff_model(dv, wv, tr_f, tr_l, te_f, te_l,
-                 layers=None, batch_size=None, epochs=None,
+def run_ff_model(dv, tr_inputs, tr_outputs, te_inputs, te_outputs,
+                 inwidth, hidden_dim, outwidth,  # single hidden layer of specified size, projecting to outwidth classes
+                 batch_size=None, epochs=None,
                  dropout=0, learning_rate=0.001, opt='sgd',
                  verbose=False):
     assert batch_size is not None or epochs is not None
@@ -235,28 +233,6 @@ def run_ff_model(dv, wv, tr_f, tr_l, te_f, te_l,
     # Prepare the data.
     if verbose:
         print("FF: preparing training and testing data...")
-    tr_inputs = []
-    te_inputs = []
-    classes = []
-    inwidth = None
-    for model_in, orig_in, orig_out in [[tr_inputs, tr_f, tr_l], [te_inputs, te_f, te_l]]:
-        for idx in range(len(orig_in[0])):
-            cat_v = []
-            for midx in range(len(orig_in)):
-                v = wv[midx]
-                modality = orig_in[midx]
-                ob1_ws = [w for ws in modality[idx][0] for w in ws]
-                avg_ob1_v = np.sum([v[w] for w in ob1_ws], axis=0) / len(ob1_ws)
-                ob2_ws = [w for ws in modality[idx][1] for w in ws]
-                avg_ob2_v = np.sum([v[w] for w in ob2_ws], axis=0) / len(ob2_ws)
-                incat = np.concatenate((avg_ob1_v, avg_ob2_v))
-                cat_v = np.concatenate((cat_v, incat))
-            model_in.append(torch.tensor(cat_v, dtype=torch.float).to(dv))
-            inwidth = len(model_in[-1])
-            if orig_out[idx] not in classes:
-                classes.append(orig_out[idx])
-    outwidth = len(classes)
-    tr_outputs = torch.tensor(tr_l, dtype=torch.long).to(dv).view(len(tr_l), 1)
     if epochs is None:  # iterate given the batch size to cover all data at least once
         epochs = int(np.ceil(len(tr_inputs) / float(batch_size)))
     if batch_size is None:
@@ -267,17 +243,9 @@ def run_ff_model(dv, wv, tr_f, tr_l, te_f, te_l,
     # Construct the model with specified number of hidden layers / dimensions (or none) and relu activations between.
     if verbose:
         print("FF: constructing model...")
-    if layers is not None:
-        lr = [nn.Linear(inwidth, layers[0])]
-        for idx in range(1, len(layers)):
-            lr.append(torch.nn.ReLU())
-            if dropout > 0:
-                lr.append(torch.nn.Dropout(dropout))
-            lr.append(nn.Linear(layers[idx - 1], layers[idx]))
-        lr.append(torch.nn.ReLU())
-        lr.append(nn.Linear(layers[-1], outwidth))
-    else:
-        lr = [nn.Linear(inwidth, outwidth)]
+    # TODO: these dropout layers might be in a stupid place.
+    lr = [nn.Linear(inwidth, hidden_dim), torch.nn.Dropout(dropout), torch.nn.ReLU(),
+          nn.Linear(hidden_dim, outwidth), torch.nn.Dropout(dropout), ]
     model = nn.Sequential(*lr).to(dv)
     if verbose:
         print("FF: ... done")
@@ -303,18 +271,18 @@ def run_ff_model(dv, wv, tr_f, tr_l, te_f, te_l,
     idxs = list(range(len(tr_inputs)))
     np.random.shuffle(idxs)
     tr_inputs = [tr_inputs[idx] for idx in idxs]
-    tr_outputs = tr_outputs[idxs, :]
+    tro = tr_outputs[idxs, :]
     idx = 0
     for epoch in range(epochs):
         tloss = 0
         c = 0
-        trcm = np.zeros(shape=(len(classes), len(classes)))  # note: calculates train acc only over curr batch
+        trcm = np.zeros(shape=(outwidth, outwidth))  # note: calculates train acc only over curr batch
         while c < batch_size:
             model.zero_grad()
             logits = model(tr_inputs[idx])
-            loss = loss_function(logits.view(1, len(logits)), tr_outputs[idx])
+            loss = loss_function(logits.view(1, len(logits)), tro[idx].long())
             tloss += loss.data.item()
-            trcm[tr_l[idx]][logits.max(0)[1]] += 1
+            trcm[int(tro[idx])][int(logits.max(0)[1])] += 1
             loss.backward()
             optimizer.step()
             c += 1
@@ -325,11 +293,11 @@ def run_ff_model(dv, wv, tr_f, tr_l, te_f, te_l,
         tr_acc = get_acc(trcm)
 
         with torch.no_grad():
-            cm = np.zeros(shape=(len(classes), len(classes)))
+            cm = np.zeros(shape=(outwidth, outwidth))
             for jdx in range(len(te_inputs)):
                 logits = model(te_inputs[jdx])
-                pc = logits.max(0)[1]
-                cm[te_l[jdx]][pc] += 1
+                pc = int(logits.max(0)[1])
+                cm[int(te_outputs[jdx])][pc] += 1
             acc = get_acc(cm)
             if best_acc is None or acc > best_acc:
                 best_acc = acc

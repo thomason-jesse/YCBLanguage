@@ -18,90 +18,44 @@ from utils import *
 
 def main(args, dv):
 
-    # Read in labeled folds.
-    print("Reading in labeled folds from '" + args.infile + "'...")
-    with open(args.infile, 'r') as f:
-        all_d = json.load(f)
-        names = all_d["names"]
-        lf = all_d["folds"]
-        train = lf['train']
-        preps = train.keys()
-        if args.test:
-            test = lf['test']
-        else:
-            test = lf['dev']  # only ever peak at the dev set.
-        # TODO: test['label'] should be drawn from gold ground truth
-    print("... done")
+    # Near universals it would be better to read from data but which we're hard-coding.
+    preps = ["in", "on"]
+    classes = [0, 1, 2]  # representing N, M, Y, respectively
+    modality_hidden_dim = 100  # fixed dimension to reduce RGBD, language, and vision representations to.
 
-    # Read in metadata.
-    print("Reading in metadata from '" + args.metadata_infile + "'...")
-    with open(args.metadata_infile, 'r') as f:
-        d = json.load(f)
-        res = d["res"]
-        imgs = d["imgs"]
-    print("... done")
-
-    # Read in RBDG features.
-    print("Reading in RGBD features from '" + args.robot_infile + "'...")
-    with open(args.robot_infile, 'r') as f:
-        rgbd = json.load(f)
-        rgbd_tr = rgbd['train']
-        if args.test:
-            rgbd_te = rgbd['test']
-        else:
-            rgbd_te = rgbd['dev']
-    print("... done")
-
-    # Select subset of data on which to evaluate.
-    print("Selecting evaluation data...")
-    models = args.models.split(',')
-    available_train = {p: None for p in preps}
-    available_test = {p: None for p in preps}
+    # Read in torch-ready input data.
+    print("Reading in torch-ready lists from json and converting them to tensors...")
+    tr_outputs = {}
+    tr_inputs_l = {}
+    tr_inputs_v = {}
+    tr_inputs_rgb = {}
+    tr_inputs_d = {}
+    te_outputs = {}
+    te_inputs_l = {}
+    te_inputs_v = {}
+    te_inputs_rgb = {}
+    te_inputs_d = {}
     for p in preps:
-        if True or 'rgbd' in models:  # DEBUG
-            available_train[p] = [[ix, train[p]["ob1"][ix], train[p]["ob2"][ix]]
-                                  for ix in range(len(train[p]["ob1"]))
-                                  if str(train[p]["ob1"][ix]) in rgbd_tr and
-                                  str(train[p]["ob2"][ix]) in rgbd_tr[str(train[p]["ob1"][ix])]]
-            available_test[p] = [[ix, test[p]["ob1"][ix], test[p]["ob2"][ix]]
-                                 for ix in range(len(test[p]["ob1"]))
-                                 if str(test[p]["ob1"][ix]) in rgbd_te and
-                                 str(test[p]["ob2"][ix]) in rgbd_te[str(test[p]["ob1"][ix])]]
-            print("... done; %d / %d available training and %d / %d available testing examples with RGBD data for %s" %
-                  (len(available_train[p]), len(train[p]["ob1"]), len(available_test[p]), len(test[p]["ob1"]), p))
-        else:
-            available_train[p] = [[ix, str(train[p]["ob1"][ix]), str(train[p]["ob2"][ix])]
-                                  for ix in range(len(train[p]["ob1"]))]
-            available_test[p] = [[ix, str(test[p]["ob1"][ix]), str(test[p]["ob2"][ix])]
-                                 for ix in range(len(test[p]["ob1"]))]
-            print("... done; %d / %d available training and %d / %d available testing examples for %s" %
-                  (len(available_train[p]), len(train[p]["ob1"]), len(available_test[p]), len(test[p]["ob1"]), p))
-    tr_o = {p: [train[p]["label"][ix] for ix, _, _ in available_train[p]] for p in preps}
-    te_o = {p: [test[p]["label"][ix] for ix, _, _ in available_test[p]] for p in preps}
+        fn = args.input + '.' + p
+        with open(fn, 'r') as f:
+            d = json.load(f)
+            tr_outputs[p] = torch.tensor(d["train"]["label"], dtype=torch.float).to(dv)
+            tr_inputs_l[p] = torch.tensor(d["train"]["lang"], dtype=torch.float).to(dv)
+            tr_inputs_v[p] = torch.tensor(d["train"]["vis"], dtype=torch.float).to(dv)
+            tr_inputs_rgb[p] = torch.tensor(d["train"]["rgb"], dtype=torch.float).to(dv) \
+                if d["train"]["rgb"] is not None else None
+            tr_inputs_d[p] = torch.tensor(d["train"]["d"], dtype=torch.float).to(dv) \
+                if d["train"]["d"] is not None else None
+            te_outputs[p] = torch.tensor(d["test"]["label"], dtype=torch.float).to(dv)
+            te_inputs_l[p] = torch.tensor(d["test"]["lang"], dtype=torch.float).to(dv)
+            te_inputs_v[p] = torch.tensor(d["test"]["vis"], dtype=torch.float).to(dv)
+            te_inputs_rgb[p] = torch.tensor(d["test"]["rgb"], dtype=torch.float).to(dv) \
+                if d["test"]["rgb"] is not None else None
+            te_inputs_d[p] = torch.tensor(d["test"]["d"], dtype=torch.float).to(dv) \
+                if d["test"]["d"] is not None else None
+    print("... done")
 
-    # Read in ground truth labels.
-    if args.gt_infile is not None:
-        print("Reading in robo ground truth labels from '" + args.gt_infile + "'...")
-        df = pd.read_csv(args.gt_infile)
-        gt_labels = {p: {} for p in preps}
-        l2c = {"Y": 2, "M": 1, "N": 0}  # Matching 3 class split.
-        for idx in df.index:
-            k = '(' + ', '.join(df["pair"][idx].split(' + ')) + ')'
-            for p in preps:
-                if df[p][idx] in l2c:
-                    gt_labels[p][k] = l2c[df[p][idx]]
-        for p in preps:
-            gt_found = 0
-            for idx in range(len(te_o[p])):
-                key = "(%s, %s)" % (names[test[p]['ob1'][idx]], names[test[p]['ob2'][idx]])
-                if key in gt_labels[p]:
-                    te_o[p][idx] = gt_labels[p][key]
-                    gt_found += 1
-            print("... done; %d / %d ground truth test labels found for %s" % (gt_found, len(te_o[p]), p))
-            if len(te_o[p]) > gt_found:
-                print(
-                    "... WARNING: using human annotations for remaining labels (TODO: annotate remainder of data)")
-
+    models = args.models.split(',')
     bs = []
     rs = []
 
@@ -111,19 +65,8 @@ def main(args, dv):
         bs.append("Majority Class")
         rs.append({})
         for p in preps:
-            rs[-1][p] = run_majority_class(tr_o[p], te_o[p])
-        print("... done")
-
-    # Majority class | object ids baseline.
-    if 'nb' in models:
-        print("Running Naive Bayes baseline...")
-        bs.append("Naive Bayes Obj One Hots")
-        rs.append({})
-        fs = [range(len(names)), range(len(names))]  # Two one-hot vectors of which object name was seen.
-        for p in preps:
-            tr_f = [[oidx, ojdx] for _, oidx, ojdx in available_train[p]]
-            te_f = [[oidx, ojdx] for _, oidx, ojdx in available_test[p]]
-            rs[-1][p] = run_cat_naive_bayes(fs, tr_f, tr_o[p], te_f, te_o[p], verbose=args.verbose)
+            rs[-1][p] = run_majority_class([int(c[0]) for c in tr_outputs[p].detach().data.cpu().numpy().tolist()],
+                                           [int(c[0]) for c in te_outputs[p].detach().data.cpu().numpy().tolist()])
         print("... done")
 
     # Read in hyperparameters for feed forward networks or set defaults.
@@ -131,15 +74,11 @@ def main(args, dv):
     if args.hyperparam_infile is not None:
         with open(args.hyperparam_infile, 'r') as f:
             d = json.load(f)
-            ff_layers = d['layers']
-            ff_width_decay = d['width_decay']
             ff_dropout = d['dropout']
             ff_lr = d['lr']
             ff_opt = d['opt']
             print("Loaded ff hyperparams: " + str(d))
     else:
-        ff_layers = 0
-        ff_width_decay = 2
         ff_dropout = 0
         ff_lr = 0.001
         ff_opt = 'adagrad'
@@ -152,30 +91,15 @@ def main(args, dv):
         rs.append({})
         for p in preps:
 
-            # Prepare input to model.
-            tr_f = [rgbd_tr[str(oidx)][str(ojdx)] for _, oidx, ojdx in available_train[p]]
-            te_f = [rgbd_te[str(oidx)][str(ojdx)] for _, oidx, ojdx in available_test[p]]
-
-            # Convert structured data into tensor inputs.
-            tr_inputs = []
-            te_inputs = []
-            classes = set()
-            for model_in, orig_in, orig_out in [[tr_inputs, tr_f, tr_o[p]],
-                                                [te_inputs, te_f, te_o[p]]]:
-                for idx in range(len(orig_in)):
-                    # Convert RGB and D numpy arrays to tensors and add batch dimension at axis 0.
-                    model_in.append([torch.tensor(orig_in[idx][0], dtype=torch.float).unsqueeze(0).to(dv),
-                                       torch.tensor(orig_in[idx][1], dtype=torch.float).unsqueeze(0).to(dv)])
-                    if orig_out[idx] not in classes:
-                        classes.add(orig_out[idx])
-            tr_outputs = torch.tensor(tr_o[p], dtype=torch.long).view(len(tr_o[p]), 1).to(dv)
+            # Couple the RGB and D inputs to feed into the paired inputs of the conv network.
+            tr_inputs = [[tr_inputs_rgb[p][idx], tr_inputs_d[p][idx]] for idx in range(len(tr_outputs[p]))]
+            te_inputs = [[te_inputs_rgb[p][idx], te_inputs_d[p][idx]] for idx in range(len(te_outputs[p]))]
             batch_size = len(tr_inputs)
 
             # Instantiate convolutional RGB and Depth models, then tie them together with a conv FF model.
-            hidden_dim = 100  # TODO: hyperparam
-            rgb_conv_model = ConvToLinearModel(dv, 3, hidden_dim).to(dv)
-            depth_conv_model = ConvToLinearModel(dv, 1, hidden_dim).to(dv)
-            model = ConvFFModel(dv, [rgb_conv_model, depth_conv_model], hidden_dim * 2, len(classes)).to(dv)
+            rgb_conv_model = ConvToLinearModel(dv, 3, modality_hidden_dim).to(dv)
+            depth_conv_model = ConvToLinearModel(dv, 1, modality_hidden_dim).to(dv)
+            model = ConvFFModel(dv, [rgb_conv_model, depth_conv_model], modality_hidden_dim * 2, len(classes)).to(dv)
 
             # Instantiate loss and optimizer.
             loss_function = nn.CrossEntropyLoss()
@@ -207,7 +131,7 @@ def main(args, dv):
                 idxs = list(range(len(tr_inputs)))
                 np.random.shuffle(idxs)
                 tr_inputs = [tr_inputs[idx] for idx in idxs]
-                tr_outputs = tr_outputs[idxs, :]
+                tro = tr_outputs[p][idxs, :]
                 idx = 0
                 result = None
                 for epoch in range(ff_epochs):
@@ -217,9 +141,10 @@ def main(args, dv):
                     while c < batch_size:
                         model.zero_grad()
                         logits = model(tr_inputs[idx])
-                        loss = loss_function(logits, tr_outputs[idx])
+                        loss = loss_function(logits, tro[idx].long())
                         tloss += loss.data.item()
-                        trcm[tr_o[p][idx]][logits.max(0)[1]] += 1
+                        # TODO: why are these logits all weird and indexed differently than the others (extra nesting)
+                        trcm[int(tro[idx])][int(logits.max(1)[1])] += 1
 
                         loss.backward()
                         optimizer.step()
@@ -234,7 +159,7 @@ def main(args, dv):
                         cm = np.zeros(shape=(len(classes), len(classes)))
                         for jdx in range(len(te_inputs)):
                             logits = model(te_inputs[jdx])
-                            cm[te_o[p][jdx]][logits.max(0)[1]] += 1
+                            cm[int(te_outputs[p][jdx])][int(logits.max(1)[1])] += 1
 
                         acc = get_acc(cm)
                         if best_acc is None or acc > best_acc:
@@ -250,292 +175,50 @@ def main(args, dv):
                 else:
                     rs[-1][p].append(result)
         print("... done")
-
-    # Prep language dictionary.
-    print("Preparing infrastructure to include GloVe info...")
-    word_to_i = {}
-    word_to_i_all = {}
-    i_to_word = {}
-    maxlen = {}
-    tr_enc_exps = {}
-    te_enc_exps = {}
-    for p in preps:
-        tr_f = [[res[oidx], res[ojdx]] for _, oidx, ojdx in available_train[p]]
-        te_f = [[res[oidx], res[ojdx]] for _, oidx, ojdx in available_test[p]]
-        word_to_i[p], i_to_word[p], maxlen[p], tr_enc_exps[p], te_enc_exps[p] = make_lang_structures(tr_f, te_f)
-        word_to_i_all[p], _, _, _, _ = make_lang_structures(tr_f, te_f, inc_test=True)
-    print("... done")
-
-    # Language naive bayes (bag of words)
-    if 'bownb' in models:
-        print("Running BoW Naive Bayes...")
-        bs.append("BoW Naive Bayes")
-        rs.append({})
-        for p in preps:
-            print("... prepping model input and output data...")
-            fs = [[0, 1] for _ in range(len(word_to_i[p]) * 2)]  # Two BoW vectors; one for each object.
-            tr_inputs = []
-            tr_outputs = []
-            for idx in range(len(tr_enc_exps[p])):
-                w_in_re_src = set()
-                for ridx in range(len(tr_enc_exps[p][idx][0])):
-                    w_in_re_src.update(tr_enc_exps[p][idx][0][ridx])
-                w_in_re_tar = set()
-                for rjdx in range(len(tr_enc_exps[p][idx][1])):
-                    w_in_re_tar.update(tr_enc_exps[p][idx][1][rjdx])
-                tr_inputs.append([1 if ((i < len(word_to_i[p]) and i in w_in_re_src) or
-                                        (i >= len(word_to_i[p]) and i - len(word_to_i[p]) in w_in_re_tar)) else 0
-                                  for i in range(len(word_to_i[p]) * 2)])
-                tr_outputs.append(tr_o[p][idx])
-            te_inputs = []
-            for idx in range(len(te_enc_exps[p])):
-                w_in_re_src = set()
-                for ridx in range(len(te_enc_exps[p][idx][0])):
-                    w_in_re_src.update(te_enc_exps[p][idx][0][ridx])
-                w_in_re_tar = set()
-                for rjdx in range(len(te_enc_exps[p][idx][1])):
-                    w_in_re_tar.update(te_enc_exps[p][idx][1][rjdx])
-                te_inputs.append([1 if ((i < len(word_to_i[p]) and i in w_in_re_src) or
-                                       (i >= len(word_to_i[p]) and i - len(word_to_i[p]) in w_in_re_tar)) else 0
-                                 for i in range(len(word_to_i[p]) * 2)])
-            print("...... done")
-            rs[-1][p] = run_cat_naive_bayes(fs, tr_inputs, tr_o[p], te_inputs, te_o[p],
-                                            smooth=1, verbose=args.verbose)
-        print ("... done")
-
-    # Average GLoVe embeddings concatenated and used to predict class.
-    print("Preparing infrastructure to run GLoVe-based feed forward model...")
-    ws = set()
-    for p in preps:
-        ws.update(word_to_i_all[p].keys())
-    g, missing = get_glove_vectors(args.glove_infile, ws)
-    emb_dim_l = len(g[list(g.keys())[0]])
-    print("... done; missing " + str(missing) + " vectors out of " + str(len(ws)))
 
     if 'glove' in models:
         print("Running GLoVe models")
         bs.append("GLoVe FF")
         rs.append({})
         for p in preps:
-            tr_f = [[res[oidx], res[ojdx]] for _, oidx, ojdx in available_train[p]]
-            te_f = [[res[oidx], res[ojdx]] for _, oidx, ojdx in available_test[p]]
-            layers = None if ff_layers == 0 else [int(emb_dim_l / np.power(ff_width_decay, lidx) + 0.5)
-                                                  for lidx in range(ff_layers)]
             if ff_random_restarts is None:
-                rs[-1][p] = run_ff_model(dv, [g], [tr_f], tr_o[p], [te_f], te_o[p],
-                                         layers=layers, epochs=ff_epochs, dropout=ff_dropout,
-                                         learning_rate=ff_lr, opt=ff_opt, verbose=args.verbose)
+                rs[-1][p] = run_ff_model(dv, tr_inputs_l[p], tr_outputs[p], te_inputs_l[p], te_outputs[p],
+                                         tr_inputs_l[p].shape[1], modality_hidden_dim, len(classes),
+                                         epochs=ff_epochs, dropout=ff_dropout, learning_rate=ff_lr, opt=ff_opt,
+                                         verbose=args.verbose)
             else:
                 rs[-1][p] = []
                 for seed in ff_random_restarts:
                     print("... with seed " + str(seed) + "...")
                     np.random.seed(seed)
                     torch.manual_seed(seed)
-                    rs[-1][p].append(run_ff_model(dv, [g], [tr_f], tr_o[p], [te_f], te_o[p],
-                                                  layers=layers, epochs=ff_epochs, dropout=ff_dropout,
-                                                  learning_rate=ff_lr, opt=ff_opt, verbose=args.verbose))
-
-    # Average BoW embeddings use to predict class.
-    if 'bowff' in models:
-        print("Preparing infrastructure to run BoW-based feed forward model...")
-        ws = set()
-        for p in preps:
-            ws.update(word_to_i_all[p].keys())
-        wv = get_bow_vectors(ws)
-        emb_dim = len(wv)
+                    rs[-1][p] = run_ff_model(dv, tr_inputs_l[p], tr_outputs[p], te_inputs_l[p], te_outputs[p],
+                                             tr_inputs_l[p].shape[1], modality_hidden_dim, len(classes),
+                                             epochs=ff_epochs, dropout=ff_dropout, learning_rate=ff_lr, opt=ff_opt,
+                                             verbose=args.verbose)
         print("... done")
-
-        print("Running BoW FF models")
-        bs.append("BoW FF")
-        rs.append({})
-        for p in preps:
-            tr_f = [[res[oidx], res[ojdx]] for _, oidx, ojdx in available_train[p]]
-            te_f = [[res[oidx], res[ojdx]] for _, oidx, ojdx in available_test[p]]
-            layers = None if ff_layers == 0 else [int(emb_dim / np.power(ff_width_decay, lidx) + 0.5)
-                                                  for lidx in range(ff_layers)]
-            if ff_random_restarts is None:
-                rs[-1][p] = run_ff_model(dv, [wv], [tr_f], tr_o[p], [te_f], te_o[p],
-                                         layers=layers, epochs=ff_epochs, dropout=ff_dropout,
-                                         learning_rate=ff_lr, opt=ff_opt, verbose=args.verbose)
-            else:
-                rs[-1][p] = []
-                for seed in ff_random_restarts:
-                    print("... with seed " + str(seed) + "...")
-                    np.random.seed(seed)
-                    torch.manual_seed(seed)
-                    rs[-1][p].append(run_ff_model(dv, [wv], [tr_f], tr_o[p], [te_f], te_o[p],
-                                                  layers=layers, epochs=ff_epochs, dropout=ff_dropout,
-                                                  learning_rate=ff_lr, opt=ff_opt, verbose=args.verbose))
-
-    # Average BoW embeddings use to predict class.
-    # https://github.com/pytorch/examples/blob/42e5b996718797e45c46a25c55b031e6768f8440/imagenet/main.py#L89-L101
-    normalize = Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])  # bc of imagenet pretraining
-    print("Preparing infrastructure to run ResNet-based feed forward model...")
-    idx_to_v = {}
-    resnet_m = resnet.resnet152(pretrained=True)
-    plm = nn.Sequential(*list(resnet_m.children())[:-1])
-    tt = ToTensor()
-    for idx in range(len(names)):
-        ffn = imgs[idx] + '.resnet'
-        if os.path.isfile(ffn):
-            with open(ffn, 'r') as f:
-                d = f.read().strip().split(' ')
-                v = np.array([float(n) for n in d])
-                idx_to_v[idx] = v
-        else:
-            pil = Image.open(imgs[idx])
-            pil = resize(pil, (224, 244))
-            im = tt(pil)
-            im = normalize(im)
-            im = torch.unsqueeze(im, 0)
-            idx_to_v[idx] = plm(im).detach().data.numpy().flatten()
-            with open(ffn, 'w') as f:
-                f.write(' '.join([str(i) for i in idx_to_v[idx]]))
-    emb_dim_v = len(idx_to_v[0])
-    print("... done")
 
     if 'resnet' in models:
         print("Running ResNet FF models")
         bs.append("ResNet FF")
         rs.append({})
         for p in preps:
-            # FF expects a sequences of indices to be looked up in the vectors dictionary and averaged, so here
-            # we just make each sequence [[oidx]] for the object idx to be looked up in the dictionary of pre-computed
-            # vectors. It doesn't need to be averaged with anything. The double wrapping is because we expect first
-            # a list of referring expressions, then a list of words inside each expression.
-            # TODO: This will look a little less weird when we have multiple viewpoints per image, in which case each
-            # TODO: object will have multiple image 'tokens' whose embedding is to be looked up as part of the BoW
-            # TODO: that will come to represent the image input.
-            tr_f = [[[[oidx]], [[ojdx]]] for _, oidx, ojdx in available_train[p]]
-            te_f = [[[[oidx]], [[ojdx]]] for _, oidx, ojdx in available_test[p]]
-            layers = None if ff_layers == 0 else [int(emb_dim_v / np.power(ff_width_decay, lidx) + 0.5)
-                                                  for lidx in range(ff_layers)]
             if ff_random_restarts is None:
-                rs[-1][p] = run_ff_model(dv, [idx_to_v], [tr_f], tr_o[p], [te_f], te_o[p],
-                                         layers=layers, epochs=ff_epochs, dropout=ff_dropout,
-                                         learning_rate=ff_lr, opt=ff_opt, verbose=args.verbose)
+                rs[-1][p] = run_ff_model(dv, tr_inputs_v[p], tr_outputs[p], te_inputs_v[p], te_outputs[p],
+                                         tr_inputs_v[p].shape[1], modality_hidden_dim, len(classes),
+                                         epochs=ff_epochs, dropout=ff_dropout, learning_rate=ff_lr, opt=ff_opt,
+                                         verbose=args.verbose)
             else:
                 rs[-1][p] = []
                 for seed in ff_random_restarts:
                     print("... with seed " + str(seed) + "...")
                     np.random.seed(seed)
                     torch.manual_seed(seed)
-                    rs[-1][p].append(run_ff_model(dv, [idx_to_v], [tr_f], tr_o[p], [te_f], te_o[p],
-                                                  layers=layers, epochs=ff_epochs, dropout=ff_dropout,
-                                                  learning_rate=ff_lr, opt=ff_opt, verbose=args.verbose))
-
-    if 'glove' in models and 'resnet' in models:
-        print("Running Glove+ResNet (Shrink) models")
-        bs.append("GLoVe+ResNet (Shrink)")
-        rs.append({})
-        for p in preps:
-
-            # Prepare input to model.
-            tr_f_l = [[res[oidx], res[ojdx]] for _, oidx, ojdx in available_train[p]]
-            te_f_l = [[res[oidx], res[ojdx]] for _, oidx, ojdx in available_test[p]]
-            tr_f_v = [[[[oidx]], [[ojdx]]] for _, oidx, ojdx in available_train[p]]
-            te_f_v = [[[[oidx]], [[ojdx]]] for _, oidx, ojdx in available_test[p]]
-            wv = [g, idx_to_v]
-
-            # Convert structured data into tensor inputs.
-            tr_inputs = []
-            te_inputs = []
-            classes = set()
-            for model_in, orig_in, orig_out in [[tr_inputs, [tr_f_l, tr_f_v], tr_o[p]],
-                                                [te_inputs, [te_f_l, te_f_v], te_o[p]]]:
-                for idx in range(len(orig_in[0])):
-                    all_in = []
-                    for midx in range(len(orig_in)):
-                        v = wv[midx]
-                        modality = orig_in[midx]
-                        ob1_ws = [w for ws in modality[idx][0] for w in ws]
-                        avg_ob1_v = np.sum([v[w] for w in ob1_ws], axis=0) / len(ob1_ws)
-                        ob2_ws = [w for ws in modality[idx][1] for w in ws]
-                        avg_ob2_v = np.sum([v[w] for w in ob2_ws], axis=0) / len(ob2_ws)
-                        incat = torch.tensor(np.concatenate((avg_ob1_v, avg_ob2_v)), dtype=torch.float).to(dv)
-                        all_in.append(incat)
-                    model_in.append(all_in)
-                    if orig_out[idx] not in classes:
-                        classes.add(orig_out[idx])
-            tr_outputs = torch.tensor(tr_o[p], dtype=torch.long).view(len(tr_o[p]), 1).to(dv)
-            batch_size = len(tr_inputs)
-
-            # Instantiate model and optimizer.
-            emb_dim = 2 * min(emb_dim_l, emb_dim_v)
-            hidden_layer_widths = [int(emb_dim / np.power(ff_width_decay, lidx) + 0.5) for lidx in range(ff_layers)]
-            model = EarlyFusionFFModel(dv, [emb_dim_l * 2, emb_dim_v * 2],  # input is concatenated across two objects
-                                       True, hidden_layer_widths, ff_dropout, len(classes)).to(dv)
-            loss_function = nn.CrossEntropyLoss()
-            if ff_opt == 'sgd':
-                optimizer = optim.SGD(model.param_list, lr=ff_lr)
-            elif ff_opt == 'adagrad':
-                optimizer = optim.Adagrad(model.param_list, lr=ff_lr)
-            elif ff_opt == 'adam':
-                optimizer = optim.Adam(model.param_list, lr=ff_lr)
-            elif ff_opt == 'rmsprop':
-                optimizer = optim.RMSprop(model.param_list, lr=ff_lr)
-            else:
-                raise ValueError('Unrecognized opt specification "' + ff_opt + '".')
-
-            # Train model.
-            if ff_random_restarts is None:
-                seeds = [None]
-            else:
-                seeds = ff_random_restarts
-                rs[-1][p] = []
-            for seed in seeds:
-                if seed is not None:
-                    print("... with seed " + str(seed) + "...")
-                    np.random.seed(seed)
-                    torch.manual_seed(seed)
-
-                # Run training for specified number of epochs.
-                best_acc = best_cm = tr_acc_at_best = trcm_at_best = None
-                idxs = list(range(len(tr_inputs)))
-                np.random.shuffle(idxs)
-                tr_inputs = [tr_inputs[idx] for idx in idxs]
-                tr_outputs = tr_outputs[idxs, :]
-                idx = 0
-                result = None
-                for epoch in range(ff_epochs):
-                    tloss = 0
-                    c = 0
-                    trcm = np.zeros(shape=(len(classes), len(classes)))  # note: calculates train acc on curr batch only
-                    while c < batch_size:
-                        model.zero_grad()
-                        logits = model(tr_inputs[idx])
-                        loss = loss_function(logits.view(1, len(logits)), tr_outputs[idx])
-                        tloss += loss.data.item()
-                        trcm[tr_o[p][idx]][logits.max(0)[1]] += 1
-
-                        loss.backward()
-                        optimizer.step()
-                        c += 1
-                        idx += 1
-                        if idx == len(tr_inputs):
-                            idx = 0
-                    tloss /= batch_size
-                    tr_acc = get_acc(trcm)
-
-                    with torch.no_grad():
-                        cm = np.zeros(shape=(len(classes), len(classes)))
-                        for jdx in range(len(te_inputs)):
-                            logits = model(te_inputs[jdx])
-                            cm[te_o[p][jdx]][logits.max(0)[1]] += 1
-
-                        acc = get_acc(cm)
-                        if best_acc is None or acc > best_acc:
-                            best_acc = acc
-                            best_cm = cm
-                            tr_acc_at_best = tr_acc
-                            trcm_at_best = trcm
-
-                    result = best_acc, best_cm, tr_acc_at_best, trcm_at_best
-
-                if seed is None:
-                    rs[-1][p] = result
-                else:
-                    rs[-1][p].append(result)
+                    rs[-1][p] = run_ff_model(dv, tr_inputs_v[p], tr_outputs[p], te_inputs_v[p], te_outputs[p],
+                                             tr_inputs_v[p].shape[1], modality_hidden_dim, len(classes),
+                                             epochs=ff_epochs, dropout=ff_dropout, learning_rate=ff_lr, opt=ff_opt,
+                                             verbose=args.verbose)
+        print("... done")
 
     if ff_random_restarts is None:
         # Show results.
@@ -582,16 +265,10 @@ def main(args, dv):
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('--infile', type=str, required=True,
-                        help="input json file with train/dev/test split")
-    parser.add_argument('--metadata_infile', type=str, required=True,
-                        help="input json file with object metadata")
-    parser.add_argument('--glove_infile', type=str, required=True,
-                        help="input glove vector text file")
-    parser.add_argument('--robot_infile', type=str, required=True,
-                        help="input robot feature file")
+    parser.add_argument('--input', type=str, required=True,
+                        help="torch ready train/test input root to load as json")
     parser.add_argument('--models', type=str, required=True,
-                        help="models to run (mc, nb, bownb, bowff, glove, resnet, rgbd)")
+                        help="models to run (mc, glove, resnet, rgbd)")
     parser.add_argument('--verbose', type=int, required=False, default=0,
                         help="verbosity level")
     parser.add_argument('--hyperparam_infile', type=str, required=False,
@@ -602,9 +279,5 @@ if __name__ == "__main__":
                         help="override default number of epochs")
     parser.add_argument('--ff_random_restarts', type=str, required=False,
                         help="comma-separated list of random seeds to use; presents avg + stddev data instead of cms")
-    parser.add_argument('--test', type=int, required=False,
-                        help="if set to 1, evaluates on the test set; NOT FOR TUNING")
-    parser.add_argument('--gt_infile', type=str, required=False,
-                        help="input csv of ground truth affordance labels; if provided, overrides dev/test labels")
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     main(parser.parse_args(), device)
