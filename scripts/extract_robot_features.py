@@ -7,7 +7,6 @@ __author__ = 'thomason-jesse'
 #     {"ob1": [oidx, ...]}  # Contains all pairs
 #     {"ob2": [ojdx, ...]}
 #     {"feats": [robot_feat_vij, ...]}  # Is set to None when the behavior hasn't been performed.
-#     {"label": [lij, ...]}  # from robo ground truth annotations, not MTurk
 #   }
 # }
 import argparse
@@ -197,35 +196,22 @@ def main(args):
     d = {}
     for fn in fns:
         print("Reading in robo dropping behavior data from '" + fn + "'...")
+        added = 0
         with open(fn, 'r') as f:
             _d = json.load(f)
             for k in _d.keys():
                 if k not in d:
                     # print("... added new key '" + k + "' with " + str(len(_d[k])) + " entries")
                     d[k] = _d[k]
+                    added += 1
                 else:
-                    # print("... extending existing key '" + k + "' with " + str(len(_d[k])) + " entries")
-                    d[k].extend(_d[k])
-        print("... done; added entries from " + str(len(_d.keys())) + " keys")
+                    print("...... WARNING: ignoring encountered key '" + k + "' with " + str(len(_d[k])) + " entries; exists with " + str(len(d[k])) + " already")
+                    continue
+        print("... done; added entries from " + str(added) + " keys")
     print("... total data keys: " + str(len(d)))
-
-    # Read in gt labels from csv.
-    print("Reading in robo ground truth labels from '" + args.gt_infile + "'...")
-    df = pd.read_csv(args.gt_infile)
-    gt_labels = {p: {} for p in preps}
-    l2c = {"Y": 1, "N": 0}  # toss out 'M' data; note this means Y is class 1 not class 2
-    for idx in df.index:
-        k = '(' + ', '.join(df["pair"][idx].split(' + ')) + ')'
-        for p in preps:
-            if df[p][idx] in l2c:
-                gt_labels[p][k] = l2c[df[p][idx]]
-        if k in gt_labels["in"] and gt_labels["in"][k] == 1:  # DEBUG: test whether 'in'/'on' exclusivity helps
-            gt_labels["on"][k] = 0  # DEBUG
-    print("... done")
 
     # Get training and testing data.
     feats = {f: {p: {} for p in preps} for f in folds}
-    labels = {f: {p: {} for p in preps} for f in folds}
     rgbd_feats = {f: {} for f in folds}  # fold, ob1, ob2, [rgb, depth] feature input maps
     for p in preps:
         print("Collating available train/test data for '" + p + "'...")
@@ -234,10 +220,6 @@ def main(args):
         pair_not_in_gt = {f: 0 for f in folds}
         pair_assigned_to_fold = {k: None for k in d}
         for k in d.keys():
-            if k in gt_labels[p]:
-                gt = gt_labels[p][k]
-            else:
-                gt = None  # get from all_d
             ob1n, ob2n = k[1:-2].split(',')
             ob1 = names.index(robo_data_ob_name_converter(ob1n.strip()))
             ob2 = names.index(robo_data_ob_name_converter(ob2n.strip()))
@@ -251,20 +233,9 @@ def main(args):
                         for trial in d[k].keys():
                             if ob1 not in feats[f][p]:
                                 feats[f][p][ob1] = {}
-                                labels[f][p][ob1] = {}
                             if ob2 not in feats[f][p][ob1]:
                                 feats[f][p][ob1][ob2] = []
                             verbose = False
-                            # if k == "(016_pear, 065-a_cups)" or k == "(052_extra_large_clamp, 065-i_cups)":
-                            #     verbose = True  # DEBUG  # Figure for examples
-                            # if gt_labels["on"][k] == 0 and gt_labels["in"][k] == 0:
-                            #     verbose = True  # DEBUG
-                            # Examples for cherry/lemon
-                            # if (k == "(011_banana, 065-e_cups)" or  # MM says 1, robo says 0 (correct)
-                            #         k == "(063-f_marbles, 003_cracker_box)" or  # MM says 2, robo says 0 (correct)
-                            #         k == "(065-e_cups, 023_wine_glass)" or  # Robot says 2 (correct), MM 0
-                            #         k == "(004_sugar_box, 065-e_cups)"):  # Robot says 2, MM 0 (correct)
-                            #     verbose = True
                             if verbose:
                                 print(k)  # DEBUG
 
@@ -283,12 +254,6 @@ def main(args):
                             feats[f][p][ob1][ob2].append(depthmaps_to_features(d[k][trial]['center_point'],
                                                                                15, verbose=verbose,
                                                                                rad_before=False, d=dc))
-
-                            if gt is None:
-                                pair_not_in_gt[f] += 1
-                                gt = all_d["folds"][f][p]["label"][idx]
-                            labels[f][p][ob1][ob2] = gt
-
                             # RGBD features.
                             if ob1 not in rgbd_feats[f]:
                                 rgbd_feats[f][int(ob1)] = {}
@@ -313,9 +278,7 @@ def main(args):
     out_d = {f: {p: {"ob1": all_d["folds"][f][p]["ob1"],
                      "ob2": all_d["folds"][f][p]["ob2"],
                      "feats": [feats[f][p][ob1][ob2] if ob1 in feats[f][p] and ob2 in feats[f][p][ob1] else None
-                               for ob1, ob2 in zip(all_d["folds"][f][p]["ob1"], all_d["folds"][f][p]["ob2"])],
-                     "label": [labels[f][p][ob1][ob2] if ob1 in labels[f][p] and ob2 in labels[f][p][ob1] else None
-                                for ob1, ob2 in zip(all_d["folds"][f][p]["ob1"], all_d["folds"][f][p]["ob2"])]
+                               for ob1, ob2 in zip(all_d["folds"][f][p]["ob1"], all_d["folds"][f][p]["ob2"])]
                      } for p in preps} for f in folds}
     with open(args.hand_features_outfile, 'w') as f:
         json.dump(out_d, f, indent=2)
@@ -337,8 +300,6 @@ if __name__ == "__main__":
                         help="input json from rosbag processing")
     parser.add_argument('--features_indir', type=str, required=False,
                         help="input dir containing input jsons from rosbag processing")
-    parser.add_argument('--gt_infile', type=str, required=True,
-                        help="input csv of ground truth affordance labels")
     parser.add_argument('--hand_features_outfile', type=str, required=True,
                         help="output json mapping object pairs to dropping behavior hand-crafted feature vectors")
     parser.add_argument('--rgbd_features_outfile', type=str, required=True,

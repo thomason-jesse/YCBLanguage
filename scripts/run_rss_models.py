@@ -16,12 +16,19 @@ from torchvision.transforms.functional import resize
 from utils import *
 
 
+def keep_all_but(l1, l2, keep_but):
+    return [l1[idx] for idx in range(len(l1)) if l2[idx] != keep_but]
+
+
 def main(args, dv):
 
     # Near universals it would be better to read from data but which we're hard-coding.
     preps = ["in", "on"]
-    classes = [0, 1, 2]  # representing N, M, Y, respectively
     modality_hidden_dim = 100  # fixed dimension to reduce RGBD, language, and vision representations to.
+
+    # labels to use.
+    train_label = args.train_objective + "_label"
+    test_label = args.test_objective + "_label"
 
     # Read in torch-ready input data.
     print("Reading in torch-ready lists from json and converting them to tensors...")
@@ -39,22 +46,46 @@ def main(args, dv):
         fn = args.input + '.' + p
         with open(fn, 'r') as f:
             d = json.load(f)
-            tr_outputs[p] = torch.tensor(d["train"]["label"], dtype=torch.float).to(dv)
-            tr_inputs_l[p] = torch.tensor(d["train"]["lang"], dtype=torch.float).to(dv)
-            tr_inputs_v[p] = torch.tensor(d["train"]["vis"], dtype=torch.float).to(dv)
-            tr_inputs_rgb[p] = torch.tensor(d["train"]["rgb"], dtype=torch.float).to(dv) \
-                if d["train"]["rgb"] is not None else None
-            tr_inputs_d[p] = torch.tensor(d["train"]["d"], dtype=torch.float).to(dv) \
-                if d["train"]["d"] is not None else None
-            te_outputs[p] = torch.tensor(d["test"]["label"], dtype=torch.float).to(dv)
-            te_inputs_l[p] = torch.tensor(d["test"]["lang"], dtype=torch.float).to(dv)
-            te_inputs_v[p] = torch.tensor(d["test"]["vis"], dtype=torch.float).to(dv)
-            te_inputs_rgb[p] = torch.tensor(d["test"]["rgb"], dtype=torch.float).to(dv) \
-                if d["test"]["rgb"] is not None else None
-            te_inputs_d[p] = torch.tensor(d["test"]["d"], dtype=torch.float).to(dv) \
-                if d["test"]["d"] is not None else None
-    print("... done")
 
+            # Need to round "maybe" (1, of 0,1,2) class down to "no" at training time in mturk labels if test objective
+            # is two-class Y/N (1/0) only.
+            # TODO: robo data may eventually have a "Maybe" class as well, to represent when not all 5 trials resulted in
+            # TODO: the same result.
+            if args.test_objective != "mturk" and args.train_objective == "mturk":
+                cmtr = d["train"][train_label].count([1])
+                d["train"][train_label] = [[1] if v[0] > 1 else [0] for v in d["train"][train_label]]
+                print("... for %s mturk training data, rounded %d Maybe labels down to No values" %
+                      (p, cmtr))
+
+            tr_outputs[p] = torch.tensor(keep_all_but(d["train"][train_label], d["train"][train_label], [-1]),
+                                         dtype=torch.float).to(dv)
+            tr_inputs_l[p] = torch.tensor(keep_all_but(d["train"]["lang"], d["train"][train_label], [-1]),
+                                          dtype=torch.float).to(dv)
+            tr_inputs_v[p] = torch.tensor(keep_all_but(d["train"]["vis"], d["train"][train_label], [-1]),
+                                          dtype=torch.float).to(dv)
+            tr_inputs_rgb[p] = torch.tensor(keep_all_but(d["train"]["rgb"], d["train"][train_label], [-1]),
+                                            dtype=torch.float).to(dv) if d["train"]["rgb"] is not None else None
+            tr_inputs_d[p] = torch.tensor(keep_all_but(d["train"]["d"], d["train"][train_label], [-1]),
+                                          dtype=torch.float).to(dv) if d["train"]["d"] is not None else None
+
+            te_outputs[p] = torch.tensor(keep_all_but(d["test"][test_label], d["test"][test_label], [-1]),
+                                         dtype=torch.float).to(dv)
+            te_inputs_l[p] = torch.tensor(keep_all_but(d["test"]["lang"], d["test"][test_label], [-1]),
+                                          dtype=torch.float).to(dv)
+            te_inputs_v[p] = torch.tensor(keep_all_but(d["test"]["vis"], d["test"][test_label], [-1]),
+                                          dtype=torch.float).to(dv)
+            te_inputs_rgb[p] = torch.tensor(keep_all_but(d["test"]["rgb"], d["test"][test_label], [-1]),
+                                            dtype=torch.float).to(dv) if d["test"]["rgb"] is not None else None
+            te_inputs_d[p] = torch.tensor(keep_all_but(d["test"]["d"], d["test"][test_label], [-1]),
+                                          dtype=torch.float).to(dv) if d["test"]["d"] is not None else None
+        print("... %s done; num train out %d, num test out %d" % (p, tr_outputs[p].shape[0], te_outputs[p].shape[0]))
+
+    train_classes = set([v[0] for v in d["train"][train_label]])
+    test_classes = set([v[0] for v in d["test"][test_label]])
+    assert(train_classes == test_classes)
+
+    classes = list(test_classes)
+    print("... classes: " + str(classes))
     models = args.models.split(',')
     bs = []
     rs = []
@@ -90,6 +121,11 @@ def main(args, dv):
         bs.append("RGBD")
         rs.append({})
         for p in preps:
+            if tr_inputs_rgb[p] is None:
+                print("... ERROR: data had no RGBD features for prep %s" % p)
+                del bs[-1]
+                del rs[-1]
+                continue
 
             # Couple the RGB and D inputs to feed into the paired inputs of the conv network.
             tr_inputs = [[tr_inputs_rgb[p][idx], tr_inputs_d[p][idx]] for idx in range(len(tr_outputs[p]))]
@@ -269,6 +305,10 @@ if __name__ == "__main__":
                         help="torch ready train/test input root to load as json")
     parser.add_argument('--models', type=str, required=True,
                         help="models to run (mc, glove, resnet, rgbd)")
+    parser.add_argument('--train_objective', type=str, required=True,
+                        help="either 'mturk', 'robo', or 'human'")
+    parser.add_argument('--test_objective', type=str, required=True,
+                        help="either 'mturk' or 'robo'")
     parser.add_argument('--verbose', type=int, required=False, default=0,
                         help="verbosity level")
     parser.add_argument('--hyperparam_infile', type=str, required=False,
