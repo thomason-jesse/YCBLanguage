@@ -14,7 +14,7 @@ First, move into `mturk_scripts`
 To extract processed RGBD features from before / after dropping behavior executions:
 (TODO: We can play with better feature normalization and processing for RGB and Depth representations; currently, I'm just calculating the raw difference After - Before for RGB and 1 / After - 1 / Before for Depth.)
 
-`> python extract_robot_features.py --splits_infile ../data/3class_object_split.json --features_indir ../src/arm_table_data/ --gt_infile ../src/robo_gt.csv --hand_features_outfile ../data/robo_hand.json --rgbd_features_outfile ../data/robo_rgbd.json`
+`> python extract_robot_features.py --splits_infile ../data/3class_object_split.json --features_indir ../src/arm_table_data/ --hand_features_outfile ../data/robo_hand.json --rgbd_features_outfile ../data/robo_rgbd.json`
 
 The "hand features" here are the old, vestigial, hand-engineered radial depth and RGB features that we're no longer using. The `--features_indir` specifies the directory where you've decided to store all the data dumps from Rosario since he mounted the arm on the table, rather than the wheelchair, to get higher quality data. The key output here is `--rgbd_features_outfile` where the RGBD Before - After features are stored for later processing.
 
@@ -22,11 +22,11 @@ The "hand features" here are the old, vestigial, hand-engineered radial depth an
 
 Next, we prep all modalities' vectors using:
 
-`> python prep_torch_data.py --infile ../data/3class_object_split.json --metadata_infile ../data/all_data.json --glove_infile /hdd/jdtho/glove/glove.6B.300d.txt --robot_infile ../data/robo_rgbd.json --gt_infile ../src/robo_gt.csv --rgbd_only 1 --out_fn ../data/torch_ready/rgbd_only_dev`
+`> python prep_torch_data.py --infile ../data/3class_object_split.json --metadata_infile ../data/all_data.json --glove_infile /hdd/jdtho/glove/glove.6B.300d.txt --robot_infile ../data/robo_rgbd.json --exec_robo_infile ../src/robo_gt.csv --rgbd_only 1 --out_fn ../data/torch_ready/rgbd_only_dev`
 
 Lots of arguments! The big takeaway is that `--out_fn` is the prefix where we're going to write that argument plus `.on` and `.in` JSON dumps of feature vectors for each modality: RGB, D, Vision, and Language, plus the target labels for the affordance, for each pair of objects.
 
-More key ideas: `gt_infile` tells the model where the ground truth CSV lives, and uses its labels to overwrite the human annotations in the dev/test fold, then throws up warnings for the unlabeled examples that remain (eventually, we will have annotated them all as a team).
+More key ideas: `exec_robo_infile` tells the model where the robot execution ground truth CSV lives, and uses its labels provide additional labels on the dev/test fold.
 
 Finally, note here that we're limiting ourselves to `rgbd_only` data: recording features only for the subset of pairs Rosario has collecting RGBD data for using the robot. We can also get information for all pairs, but with RGB and D feature vectors set to None, using:
 
@@ -38,11 +38,11 @@ In both cases, note that I'm naming the output for the `dev` set. If the optiona
 
 Okay, finally, now that we have all our vector inputs/outputs prepped, we can run models with:
 
-`> python run_rss_models.py --models glove,resnet,rgbd,mc --input ../data/torch_ready/rgbd_only_dev`
+`> python run_rss_models.py --models glove,resnet,rgbd,mc --input ../data/torch_ready/rgbd_only_dev --train_objective mturk --test_objective robo`
 
 or, for all data but no RGBD model, 
 
-`> python run_rss_models.py --models glove,resnet,mc --input ../data/torch_ready/all_dev`
+`> python run_rss_models.py --models glove,resnet,mc --input ../data/torch_ready/all_dev --train_objective mturk --test_objective mturk`
 
 The `--models` flag tells the script which models to train of `mc` majority class, `glove` language, `resnet` vision, and `rgbd` the conv-based RGBD model.
 

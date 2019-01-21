@@ -8,6 +8,7 @@ import os
 import pandas as pd
 from PIL import Image
 from models import *
+from sklearn.metrics import cohen_kappa_score
 from torchvision.models import resnet
 from torchvision.transforms import ToTensor
 from torchvision.transforms import Normalize
@@ -16,6 +17,7 @@ from utils import *
 
 
 def main(args):
+    assert not args.rgbd_only or args.exec_robo_infile is not None
 
     # Read in labeled folds.
     print("Reading in labeled folds from '" + args.infile + "'...")
@@ -76,10 +78,12 @@ def main(args):
     tr_o = {p: [train[p]["label"][ix] for ix, _, _ in available_train[p]] for p in preps}
     te_o = {p: [test[p]["label"][ix] for ix, _, _ in available_test[p]] for p in preps}
 
-    # Read in ground truth labels.
-    if args.gt_infile is not None:
-        print("Reading in robo ground truth labels from '" + args.gt_infile + "'...")
-        df = pd.read_csv(args.gt_infile)
+    # Read in robot execution ground truth labels.
+    tr_robo_o = {p: [-1 for ix, _, _ in available_train[p]] for p in preps}
+    te_robo_o = {p: [-1 for ix, _, _ in available_test[p]] for p in preps}
+    if args.exec_robo_infile is not None:
+        print("Reading in robo execution ground truth labels from '" + args.exec_robo_infile + "'...")
+        df = pd.read_csv(args.exec_robo_infile)
         gt_labels = {p: {} for p in preps}
         l2c = {"Y": 2, "M": 1, "N": 0}  # Matching 3 class split.
         for idx in df.index:
@@ -88,15 +92,90 @@ def main(args):
                 if df[p][idx] in l2c:
                     gt_labels[p][k] = l2c[df[p][idx]]
         for p in preps:
-            gt_found = 0
-            for idx in range(len(te_o[p])):
-                key = "(%s, %s)" % (names[test[p]['ob1'][idx]], names[test[p]['ob2'][idx]])
-                if key in gt_labels[p]:
-                    te_o[p][idx] = gt_labels[p][key]
-                    gt_found += 1
-            print("... done; %d / %d ground truth test labels found for %s" % (gt_found, len(te_o[p]), p))
-            if len(te_o[p]) > gt_found:
-                print("... WARNING: using human annotations for remaining labels (TODO: annotate remainder of data)")
+            for fold, fold_struct, orig_struct in [["train", tr_robo_o, train],
+                                                   ["test", te_robo_o, test]]:
+                gt_found = 0
+                for idx in range(len(fold_struct[p])):
+                    key = "(%s, %s)" % (names[orig_struct[p]['ob1'][idx]], names[orig_struct[p]['ob2'][idx]])
+                    if key in gt_labels[p]:
+                        fold_struct[p][idx] = gt_labels[p][key]
+                        gt_found += 1
+                print("... done; %d / %d robot exeuction ground truth %s labels found for %s" %
+                      (gt_found, len(fold_struct[p]), fold, p))
+
+    # TODO: read in human execution ground truth labels.
+    tr_human_o = {p: [-1 for ix, _, _ in available_train[p]] for p in preps}
+    te_human_o = {p: [-1 for ix, _, _ in available_test[p]] for p in preps}
+    if args.exec_human_indir is not None:
+        print("Reading in human execution ground truth labels from '" + args.exec_human_indir + "'...")
+        annotators = []
+        # indexed by p, then (aidx, bidx), then [annotator_id0_label, anntotor_id1_label, ...]
+        annotations = {p: {} for p in preps}
+        l2c = {"on": {"on": 1, "in": 0},
+               "in": {"on": 1, "in": 1},
+               "no": {"on": 0, "in": 0},
+               "same": None, "": None}
+        for _, _, fns in os.walk(args.exec_human_indir):
+            for fn in fns:
+                ps = fn.split('.')
+                if ps[-1] == 'csv':  # annotation file
+                    annotator = ps[0]
+                    if annotator not in annotators:
+                        annotators.append(annotator)
+                    fn = os.path.join(args.exec_human_indir, fn)
+                    print("... reading annotator %s annotations from '%s'..." % (annotator, fn))
+                    num_annot = 0
+                    with open(fn, 'r') as f:
+                        for lidx, line in enumerate(f.readlines()):
+                            if lidx == 0:
+                                continue
+                            lp = line.strip().split(',')
+                            aidx = names.index(lp[0])
+                            bidx = names.index(lp[1])
+                            k = (aidx, bidx)
+                            al = l2c[lp[4]]
+                            if al is not None:  # label is not "same" or blank, so we have an annotation to add
+                                for p in preps:
+                                    if k not in annotations[p]:
+                                        annotations[p][k] = []
+                                    annotations[p][k].append(al[p])
+                                num_annot += 1
+                    print("...... done; read %d useful pair annotations" % num_annot)
+        # Reduce annotations to single values using majority vote and calculate kappa agreement.
+        print("... taking majority vote among annotators and calculating agreement...")
+        mv_annotations = {p: {} for p in preps}  # indexed p, (aidx, bidx), single value entry.
+        for p in preps:
+            lfk = [[] for _ in range(len(annotators))]  # labels for kappa calculation
+            for k in annotations[p]:
+                if len(annotations[p][k]) != len(annotators):
+                    print("...... ERROR: %s pair (%s, %s) has %d / %d annotations" %
+                          (p, names[k[0]], names[k[1]], len(annotations[p][k]), len(annotators)))
+                c0 = annotations[p][k].count(0)
+                c1 = annotations[p][k].count(1)
+                if c1 > c0:  # favor 'no' in the event of a tie
+                    mv_annotations[p][k] = 1
+                else:
+                    mv_annotations[p][k] = 0
+                for an in range(len(annotators)):
+                    lfk[an].append(annotations[p][k][an])
+            kappas = [cohen_kappa_score(lfk[ani], lfk[anj]) for ani in range(len(annotators) - 1)
+                      for anj in range(ani + 1, len(annotators))]
+            print("...... inter-annotator Cohen's kappa avg for %s: %.3f +/- %.3f" % (p, np.average(kappas), np.std(kappas)))
+            mvfk = [mv_annotations[p][k] for k in annotations[p]]
+            kappas = [cohen_kappa_score(lfk[ani], mvfk) for ani in range(len(annotators))]
+            print("...... annotator vs MV Cohen's kappa avg for %s: %.3f +/- %.3f" % (p, np.average(kappas), np.std(kappas)))
+        # Tie annotations to label structure.
+        for p in preps:
+            for fold, fold_struct, available in [["train", tr_human_o, available_train],
+                                                 ["test", te_human_o, available_test]]:
+                gt_found = 0
+                for idx in range(len(fold_struct[p])):
+                    key = (available[p][idx][1], available[p][idx][2])
+                    if key in mv_annotations[p]:
+                        fold_struct[p][idx] = mv_annotations[p][key]
+                        gt_found += 1
+                print("... done; %d / %d human execution ground truth %s labels found for %s" %
+                      (gt_found, len(fold_struct[p]), fold, p))
 
     # Prep language dictionary.
     print("Preparing infrastructure to include GloVe info...")
@@ -162,6 +241,10 @@ def main(args):
         print("... preparing output tensors...")
         tr_outputs = torch.tensor(tr_o[p], dtype=torch.long).view(len(tr_o[p]), 1).numpy()
         te_outputs = torch.tensor(te_o[p], dtype=torch.long).view(len(te_o[p]), 1).numpy()
+        tr_robo_outputs = torch.tensor(tr_robo_o[p], dtype=torch.long).view(len(tr_robo_o[p]), 1).numpy()
+        te_robo_outputs = torch.tensor(te_robo_o[p], dtype=torch.long).view(len(te_robo_o[p]), 1).numpy()
+        tr_human_outputs = torch.tensor(tr_human_o[p], dtype=torch.long).view(len(tr_human_o[p]), 1).numpy()
+        te_human_outputs = torch.tensor(te_human_o[p], dtype=torch.long).view(len(te_human_o[p]), 1).numpy()
         print("...... done")
 
         if args.rgbd_only:
@@ -219,17 +302,21 @@ def main(args):
         print("...... done")
 
         # Write resulting vectors to json file as numpy.
-        out_fn = args.out_fn + "." + p
+        out_fn = args.out_fn_prefix + "." + p
         print("... writing tensors as numpy jsons to '" + out_fn + "' for " + p)
         with open(out_fn, 'w') as f:
             d = {"train":
-                 {"label": tr_outputs.tolist(),
+                 {"mturk_label": tr_outputs.tolist(),
+                  "robo_label": tr_robo_outputs.tolist(),
+                  "human_label": tr_human_outputs.tolist(),
                   "lang": tr_inputs_l.tolist(),
                   "vis": tr_inputs_v.tolist(),
                   "rgb": tr_inputs_rgb.tolist() if tr_inputs_rgb is not None else None,
                   "d": tr_inputs_d.tolist() if tr_inputs_d is not None else None},
                  "test":
-                 {"label": te_outputs.tolist(),
+                 {"mturk_label": te_outputs.tolist(),
+                  "robo_label": te_robo_outputs.tolist(),
+                  "human_label": te_human_outputs.tolist(),
                   "lang": te_inputs_l.tolist(),
                   "vis": te_inputs_v.tolist(),
                   "rgb": te_inputs_rgb.tolist() if te_inputs_rgb is not None else None,
@@ -251,10 +338,12 @@ if __name__ == "__main__":
                         help="input robot feature file")
     parser.add_argument('--rgbd_only', type=int, required=True,
                         help="whether to restrict to extracting rgbd data")
-    parser.add_argument('--out_fn', type=str, required=True,
+    parser.add_argument('--exec_robo_infile', type=str, required=False,
+                        help="input csv of robot execution ground truth affordance labels")
+    parser.add_argument('--exec_human_indir', type=str, required=False,
+                        help="input dir of human annotator execution ground truth affordance labels csvs")
+    parser.add_argument('--out_fn_prefix', type=str, required=True,
                         help="where to write the json output torch data")
     parser.add_argument('--test', type=int, required=False,
                         help="if set to 1, evaluates on the test set; NOT FOR TUNING")
-    parser.add_argument('--gt_infile', type=str, required=False,
-                        help="input csv of ground truth affordance labels; if provided, overrides dev/test labels")
     main(parser.parse_args())
