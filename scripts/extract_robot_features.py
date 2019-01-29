@@ -14,7 +14,6 @@ import json
 import matplotlib.pyplot as plt
 import numpy as np
 import os
-import pandas as pd
 from matplotlib import colors
 
 
@@ -172,27 +171,12 @@ def depthmaps_to_features(raw_origin, num_feats, verbose=False,
     return features[:-1]
 
 
-def main(args):
-    assert args.features_infile is not None or args.features_indir is not None
-
-    # Read in labeled folds.
-    print("Reading in labeled folds from '" + args.splits_infile + "'...")
-    with open(args.splits_infile, 'r') as f:
-        all_d = json.load(f)
-        names = all_d["names"]
-        folds = all_d["folds"].keys()
-        preps = all_d["folds"][folds[0]].keys()
-    print("... done")
-
-    # Read in data from robo drop.
-    if args.features_indir is None:
-        fns = [args.features_infile]
-    else:
-        fns = []
-        for _, _, files in os.walk(args.features_indir):
-            for fn in files:
-                if fn.split('.')[-1] == 'json':
-                    fns.append(os.path.join(args.features_indir, fn))
+def read_robo_dir(indir):
+    fns = []
+    for _, _, files in os.walk(indir):
+        for fn in files:
+            if fn.split('.')[-1] == 'json':
+                fns.append(os.path.join(indir, fn))
     d = {}
     for fn in fns:
         print("Reading in robo dropping behavior data from '" + fn + "'...")
@@ -205,10 +189,27 @@ def main(args):
                     d[k] = _d[k]
                     added += 1
                 else:
-                    print("...... WARNING: ignoring encountered key '" + k + "' with " + str(len(_d[k])) + " entries; exists with " + str(len(d[k])) + " already")
+                    print("...... WARNING: ignoring encountered key '" + k + "' with " + str(
+                        len(_d[k])) + " entries; exists with " + str(len(d[k])) + " already")
                     continue
         print("... done; added entries from " + str(added) + " keys")
     print("... total data keys: " + str(len(d)))
+    return d
+
+
+def main(args):
+
+    # Read in labeled folds.
+    print("Reading in labeled folds from '" + args.splits_infile + "'...")
+    with open(args.splits_infile, 'r') as f:
+        all_d = json.load(f)
+        names = all_d["names"]
+        folds = all_d["folds"].keys()
+        preps = all_d["folds"][folds[0]].keys()
+    print("... done")
+
+    # Read in data from robo drop.
+    d = read_robo_dir(args.features_indir)
 
     # Get training and testing data.
     feats = {f: {p: {} for p in preps} for f in folds}
@@ -223,9 +224,11 @@ def main(args):
             ob1n, ob2n = k[1:-2].split(',')
             ob1 = names.index(robo_data_ob_name_converter(ob1n.strip()))
             ob2 = names.index(robo_data_ob_name_converter(ob2n.strip()))
+            k_assigned = False
             for f in folds:
                 for idx in range(len(all_d["folds"][f][p]["ob1"])):
                     if ob1 == all_d["folds"][f][p]["ob1"][idx] and ob2 == all_d["folds"][f][p]["ob2"][idx]:
+                        k_assigned = True
                         if pair_assigned_to_fold[k] is not None:
                             print("WARNING: pair '" + k + "' previously assigned to fold '"
                                   + pair_assigned_to_fold[k] + "' now in '" + f + "'")
@@ -267,6 +270,13 @@ def main(args):
 
                         num_pairs[f] += 1
                         avg_trials[f] += len(d[k].keys())
+            if not k_assigned:
+                # print("... WARNING: (%s, %s) in %s has RGBD data but is not in all_data struct" %
+                #       (names[ob1], names[ob2], p))
+                # This is fine but annoying; the split means we have some pairs that are in "on" but not in "in"
+                # They're guaranteed to share a fold if they're in one of the folds, but not guaranteed to both
+                # be present since we were trying to balance the classes. They're all ~mostly~ there.
+                pass
         for f in folds:
             avg_trials[f] /= float(num_pairs[f]) if num_pairs[f] > 0 else 1
             print("... for '" + f + "', got " + str(num_pairs[f]) + " pairs with avg " +
@@ -296,8 +306,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--splits_infile', type=str, required=True,
                         help="input json file with train/dev/test split")
-    parser.add_argument('--features_infile', type=str, required=False,
-                        help="input json from rosbag processing")
     parser.add_argument('--features_indir', type=str, required=False,
                         help="input dir containing input jsons from rosbag processing")
     parser.add_argument('--hand_features_outfile', type=str, required=True,

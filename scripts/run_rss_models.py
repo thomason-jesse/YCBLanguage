@@ -48,10 +48,8 @@ def main(args, dv):
             d = json.load(f)
 
             # Need to round "maybe" (1, of 0,1,2) class down to "no" at training time in mturk labels if test objective
-            # is two-class Y/N (1/0) only.
-            # TODO: robo data may eventually have a "Maybe" class as well, to represent when not all 5 trials resulted in
-            # TODO: the same result.
-            if args.test_objective != "mturk" and args.train_objective == "mturk":
+            # is two-class Y/N (1/0) only 'human' labels.
+            if args.test_objective == "human" and args.train_objective == "mturk":
                 cmtr = d["train"][train_label].count([1])
                 d["train"][train_label] = [[1] if v[0] > 1 else [0] for v in d["train"][train_label]]
                 print("... for %s mturk training data, rounded %d Maybe labels down to No values" %
@@ -80,11 +78,12 @@ def main(args, dv):
                                           dtype=torch.float).to(dv) if d["test"]["d"] is not None else None
         print("... %s done; num train out %d, num test out %d" % (p, tr_outputs[p].shape[0], te_outputs[p].shape[0]))
 
-    train_classes = set([v[0] for v in d["train"][train_label]])
-    test_classes = set([v[0] for v in d["test"][test_label]])
-    assert(train_classes == test_classes)
+        train_classes = set([int(v.item()) for v in tr_outputs[p]])
+        test_classes = set([int(v.item()) for v in te_outputs[p]])
+        if (train_classes != test_classes):
+            print("...... WARNING: train classes " + str(train_classes) + " do not match test classes " + str(test_classes) + "; will use union")
+        classes = list(train_classes.union(test_classes))
 
-    classes = list(test_classes)
     print("... classes: " + str(classes))
     models = args.models.split(',')
     bs = []
@@ -264,8 +263,10 @@ def main(args, dv):
             for p in preps:
                 print("  " + p + ":\tacc %0.3f" % rs[idx][p][0] + "\t(train: %0.3f" % rs[idx][p][2] + ")")
                 print("  \tf1  %0.3f" % get_f1(rs[idx][p][1]) + "\t(train: %0.3f" % get_f1(rs[idx][p][3]) + ")")
-                print('\t(CM\t' + '\n\t\t'.join(['\t'.join([str(int(ct)) for ct in rs[idx][p][1][i]])
+                print('\t(TeCM\t' + '\n\t\t'.join(['\t'.join([str(int(ct)) for ct in rs[idx][p][1][i]])
                                                  for i in range(len(rs[idx][p][1]))]) + ")")
+                print('\t(TrCM\t' + '\n\t\t'.join(['\t'.join([str(int(ct)) for ct in rs[idx][p][3][i]])
+                                                 for i in range(len(rs[idx][p][3]))]) + ")")
 
         # Write val accuracy results.
         if args.perf_outfile is not None:
