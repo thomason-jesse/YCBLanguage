@@ -4,7 +4,6 @@ __author__ = 'thomason-jesse'
 # RBD exectution images for each of the 5 trials.
 import argparse
 import os
-import matplotlib
 import matplotlib.pyplot as plt
 from matplotlib import colors
 import numpy as np

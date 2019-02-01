@@ -17,6 +17,7 @@ import os
 from matplotlib import colors
 
 
+# Fix typos and mispellings in JSON files that store RGBD recordings of robo trials.
 def robo_data_ob_name_converter(n):
     if n[0] != '0':
         n = '0' + n
@@ -46,6 +47,8 @@ def robo_data_ob_name_converter(n):
         n = n[:-5] + "_duplo"
     if n[-6:] == "_orang":
         n = n[:-6] + "_orange"
+    if n[-6:] == "_bottl":
+        n = n[:-6] + "_bottle"
     if n[-8:] == "_airplan":
         n = n[:-8] + "_airplane"
     if n[-7:] == "_marble":
@@ -57,6 +60,8 @@ def robo_data_ob_name_converter(n):
     if n[-7:] == "-skille":
         n = n[:-7] + "-skillet"
     n = n.replace('philips', 'phillips')
+    n = n.replace('007_rubiks', '077_rubiks')
+    n = n.replace('foam_block', 'foam_brick')
     return n
 
 
@@ -261,12 +266,17 @@ def main(args):
                             if ob1 not in rgbd_feats[f]:
                                 rgbd_feats[f][int(ob1)] = {}
                             if ob2 not in rgbd_feats[f][ob1]:
-                                # Unnormalized distance between final and initial image in RGB and depth space.
+                                # Un-normalized distance between final and initial image in RGB and depth space.
                                 # For depth, record features delta of 1 / depth between final and initial image.
                                 # TODO: some kind of normalization of both RGB and depth data.
+                                # TODO: for christ sake this throws out all the other trials at least keep those around
+                                # TODO: either by averaging or by independent consideration as additional examples.
+                                # TODO: Gonna have to average over them to make the maybe labels make any sense, but
+                                # TODO: repeated instances will give just a whole lot more training data for the convs.
+                                t1dm = np.divide(np.ones_like(t1dm), t1dm, out=np.zeros_like(t1dm), where=t1dm != 0)
+                                t0dm = np.divide(np.ones_like(t0dm), t0dm, out=np.zeros_like(t0dm), where=t0dm != 0)
                                 rgbd_feats[f][int(ob1)][int(ob2)] = [(t1cm - t0cm).tolist(),
-                                                                     np.expand_dims((1. / t1dm) - (1. / t0dm),
-                                                                                    axis=0).tolist()]
+                                                                     np.expand_dims(t1dm - t0dm, axis=0).tolist()]
 
                         num_pairs[f] += 1
                         avg_trials[f] += len(d[k].keys())

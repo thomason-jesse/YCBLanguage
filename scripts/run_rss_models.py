@@ -81,7 +81,8 @@ def main(args, dv):
         train_classes = set([int(v.item()) for v in tr_outputs[p]])
         test_classes = set([int(v.item()) for v in te_outputs[p]])
         if (train_classes != test_classes):
-            print("...... WARNING: train classes " + str(train_classes) + " do not match test classes " + str(test_classes) + "; will use union")
+            print("...... WARNING: train classes " + str(train_classes) + " do not match test classes "
+                  + str(test_classes) + " for " + p + "; will use union")
         classes = list(train_classes.union(test_classes))
 
     print("... classes: " + str(classes))
@@ -96,7 +97,8 @@ def main(args, dv):
         rs.append({})
         for p in preps:
             rs[-1][p] = run_majority_class([int(c[0]) for c in tr_outputs[p].detach().data.cpu().numpy().tolist()],
-                                           [int(c[0]) for c in te_outputs[p].detach().data.cpu().numpy().tolist()])
+                                           [int(c[0]) for c in te_outputs[p].detach().data.cpu().numpy().tolist()],
+                                           len(classes))
         print("... done")
 
     # Read in hyperparameters for feed forward networks or set defaults.
@@ -111,7 +113,7 @@ def main(args, dv):
     else:
         ff_dropout = 0
         ff_lr = 0.001
-        ff_opt = 'adagrad'
+        ff_opt = 'sgd'
     ff_random_restarts = None if args.ff_random_restarts is None else \
         [int(s) for s in args.ff_random_restarts.split(',')]
 
@@ -129,7 +131,7 @@ def main(args, dv):
             # Couple the RGB and D inputs to feed into the paired inputs of the conv network.
             tr_inputs = [[tr_inputs_rgb[p][idx], tr_inputs_d[p][idx]] for idx in range(len(tr_outputs[p]))]
             te_inputs = [[te_inputs_rgb[p][idx], te_inputs_d[p][idx]] for idx in range(len(te_outputs[p]))]
-            batch_size = len(tr_inputs)
+            batch_size = 8  # TODO: hyperparam to set
 
             # Instantiate convolutional RGB and Depth models, then tie them together with a conv FF model.
             rgb_conv_model = ConvToLinearModel(dv, 3, modality_hidden_dim).to(dv)
@@ -137,6 +139,7 @@ def main(args, dv):
             model = ConvFFModel(dv, [rgb_conv_model, depth_conv_model], modality_hidden_dim * 2, len(classes)).to(dv)
 
             # Instantiate loss and optimizer.
+            # TODO: optimizer is a hyperparam to set.
             loss_function = nn.CrossEntropyLoss()
             if ff_opt == 'sgd':
                 optimizer = optim.SGD(model.param_list, lr=ff_lr)
@@ -157,7 +160,7 @@ def main(args, dv):
                 rs[-1][p] = []
             for seed in seeds:
                 if seed is not None:
-                    print("... with seed " + str(seed) + "...")
+                    print("... %s with seed %d ..." % (p, seed))
                     np.random.seed(seed)
                     torch.manual_seed(seed)
 
@@ -167,27 +170,40 @@ def main(args, dv):
                 np.random.shuffle(idxs)
                 tr_inputs = [tr_inputs[idx] for idx in idxs]
                 tro = tr_outputs[p][idxs, :]
-                idx = 0
                 result = None
                 for epoch in range(ff_epochs):
                     tloss = 0
-                    c = 0
-                    trcm = np.zeros(shape=(len(classes), len(classes)))  # note: calculates train acc on curr batch only
-                    while c < batch_size:
+                    trcm = np.zeros(shape=(len(classes), len(classes)))
+                    tidx = 0
+                    batches_run = 0
+                    while tidx < len(tr_inputs):
                         model.zero_grad()
-                        logits = model(tr_inputs[idx])
-                        loss = loss_function(logits, tro[idx].long())
+                        batch_in = [torch.zeros((batch_size, tr_inputs_rgb[p][0].shape[1],
+                                                 tr_inputs_rgb[p][0].shape[2], tr_inputs_rgb[p][0].shape[3])).to(dv),
+                                    torch.zeros((batch_size, tr_inputs_d[p][0].shape[1],
+                                                 tr_inputs_d[p][0].shape[2], tr_inputs_d[p][0].shape[3])).to(dv)]
+                        batch_gold = torch.zeros(batch_size).to(dv)
+                        for bidx in range(batch_size):
+                            batch_in[0][bidx, :, :, :] = tr_inputs_rgb[p][tidx].squeeze()
+                            batch_in[1][bidx, :] = tr_inputs_d[p][tidx].squeeze()
+                            batch_gold[bidx] = tro[tidx][0]
+
+                            tidx += 1
+                            if tidx == len(tr_inputs):
+                                break
+
+                        logits = model(batch_in)
+                        loss = loss_function(logits, batch_gold.long())
                         tloss += loss.data.item()
-                        # TODO: why are these logits all weird and indexed differently than the others (extra nesting)
-                        trcm[int(tro[idx])][int(logits.max(1)[1])] += 1
+                        batches_run += 1
 
                         loss.backward()
                         optimizer.step()
-                        c += 1
-                        idx += 1
-                        if idx == len(tr_inputs):
-                            idx = 0
-                    tloss /= batch_size
+
+                        for jdx in range(logits.shape[0]):
+                            trcm[int(batch_gold[jdx])][int(logits[jdx].argmax(0))] += 1
+
+                    tloss /= batches_run
                     tr_acc = get_acc(trcm)
 
                     with torch.no_grad():
@@ -281,11 +297,17 @@ def main(args, dv):
             print(" " + bs[idx] + ":")
             for p in preps:
                 avg_acc = np.average([rs[idx][p][jdx][0] for jdx in range(len(ff_random_restarts))])
+                std_acc = np.std([rs[idx][p][jdx][0] for jdx in range(len(ff_random_restarts))])
                 avg_tr_acc = np.average([rs[idx][p][jdx][2] for jdx in range(len(ff_random_restarts))])
+                std_tr_acc = np.std([rs[idx][p][jdx][2] for jdx in range(len(ff_random_restarts))])
                 avg_f1 = np.average([get_f1(rs[idx][p][jdx][1]) for jdx in range(len(ff_random_restarts))])
+                std_f1 = np.std([get_f1(rs[idx][p][jdx][1]) for jdx in range(len(ff_random_restarts))])
                 avg_tr_f1 = np.average([get_f1(rs[idx][p][jdx][3]) for jdx in range(len(ff_random_restarts))])
-                print("  " + p + ":\tacc %0.3f" % avg_acc + "\t(train: %0.3f" % avg_tr_acc + ")")
-                print("  \tf1  %0.3f" % avg_f1 + "\t(train: %0.3f" % avg_tr_f1 + ")")
+                std_tr_f1 = np.std([get_f1(rs[idx][p][jdx][3]) for jdx in range(len(ff_random_restarts))])
+                print("  " + p + ":\tacc %0.3f+/-%0.3f" % (avg_acc, std_acc) +
+                      "\t(train: %0.3f+/-%0.3f" % (avg_tr_acc, std_tr_acc) + ")")
+                print("  \tf1  %0.3f+/-%0.3f" % (avg_f1, std_f1) +
+                      "\t(train: %0.3f+/-%0.3f" % (avg_tr_f1, std_tr_f1) + ")")
 
         # Write out results for all seeds so that a downstream script can process them for stat sig.
         if args.perf_outfile is not None:

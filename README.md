@@ -22,15 +22,15 @@ The "hand features" here are the old, vestigial, hand-engineered radial depth an
 
 Next, we prep all modalities' vectors using:
 
-`> python prep_torch_data.py --infile ../data/3class_object_split.json --metadata_infile ../data/all_data.json --glove_infile /hdd/jdtho/glove/glove.6B.300d.txt --robot_infile ../data/robo_rgbd.json --exec_robo_infile ../src/robo_gt.csv --rgbd_only 1 --out_fn ../data/torch_ready/rgbd_only_dev`
+`> python prep_torch_data.py --infile ../data/3class_object_split.json --metadata_infile ../data/all_data.json --glove_infile /hdd/jdtho/glove/glove.6B.300d.txt --robot_infile ../data/robo_rgbd.json --exec_robo_indir ../src/robo_exec_gt/ --exec_human_indir ../src/human_exec_gt/ --rgbd_only 1 --out_fn ../data/torch_ready/rgbd_only_dev`
 
 Lots of arguments! The big takeaway is that `--out_fn` is the prefix where we're going to write that argument plus `.on` and `.in` JSON dumps of feature vectors for each modality: RGB, D, Vision, and Language, plus the target labels for the affordance, for each pair of objects.
 
-More key ideas: `exec_robo_infile` tells the model where the robot execution ground truth CSV lives, and uses its labels provide additional labels on the dev/test fold.
+More key ideas: `exec_robo_indir` and `exec_human_indir` tells the script where the robot and human execution ground truth CSV annotations live, and attaches those labels as additional output options that we can train/test against later.
 
 Finally, note here that we're limiting ourselves to `rgbd_only` data: recording features only for the subset of pairs Rosario has collecting RGBD data for using the robot. We can also get information for all pairs, but with RGB and D feature vectors set to None, using:
 
-`> python prep_torch_data.py --infile ../data/3class_object_split.json --metadata_infile ../data/all_data.json --glove_infile /hdd/jdtho/glove/glove.6B.300d.txt --robot_infile ../data/robo_rgbd.json --rgbd_only 0 --out_fn ../data/torch_ready/all_dev`
+`> python prep_torch_data.py --infile ../data/3class_object_split.json --metadata_infile ../data/all_data.json --glove_infile /hdd/jdtho/glove/glove.6B.300d.txt --robot_infile ../data/robo_rgbd.json --exec_robo_indir ../src/robo_exec_gt/ --exec_human_indir ../src/human_exec_gt/ --rgbd_only 0 --out_fn ../data/torch_ready/all_dev`
 
 In both cases, note that I'm naming the output for the `dev` set. If the optional `test` flag is set in these commands, the `test` set will be used instead of `dev`, but we really don't want to do that until our final evaluation, to be safe and not accidentally peak at the test data!
 

@@ -14,7 +14,7 @@ from utils import *
 # in the test set.
 # tr_l - training labels
 # te_l - testing labels
-def run_majority_class(tr_l, te_l):
+def run_majority_class(tr_l, te_l, num_classes):
 
     # Train: count the majority class across all labels.
     cl = {}
@@ -25,8 +25,8 @@ def run_majority_class(tr_l, te_l):
     mc = sorted(cl, key=cl.get, reverse=True)[0]
 
     # Test: for every instance, guess the majority class.
-    cm = np.zeros(shape=(len(cl), len(cl)))
-    trcm = np.zeros(shape=(len(cl), len(cl)))
+    cm = np.zeros(shape=(num_classes, num_classes))
+    trcm = np.zeros(shape=(num_classes, num_classes))
     for labels, conmat in [[te_l, cm], [tr_l, trcm]]:
         for l in labels:
             conmat[l][mc] += 1
@@ -277,6 +277,7 @@ def run_ff_model(dv, tr_inputs, tr_outputs, te_inputs, te_outputs,
         tloss = 0
         c = 0
         trcm = np.zeros(shape=(outwidth, outwidth))  # note: calculates train acc only over curr batch
+        # TODO: fix this bonkers single-example-per-batch code.
         while c < batch_size:
             model.zero_grad()
             logits = model(tr_inputs[idx])

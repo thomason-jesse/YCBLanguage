@@ -17,7 +17,7 @@ from utils import *
 
 
 def main(args):
-    assert not args.rgbd_only or args.exec_robo_infile is not None
+    assert not args.rgbd_only or args.exec_robo_indir is not None
 
     # Read in labeled folds.
     print("Reading in labeled folds from '" + args.infile + "'...")
@@ -78,32 +78,51 @@ def main(args):
     tr_o = {p: [train[p]["label"][ix] for ix, _, _ in available_train[p]] for p in preps}
     te_o = {p: [test[p]["label"][ix] for ix, _, _ in available_test[p]] for p in preps}
 
-    # Read in robot execution ground truth labels.
+    # Read in robot execution ground truth labels from annotation CSVs.
     tr_robo_o = {p: [-1 for ix, _, _ in available_train[p]] for p in preps}
     te_robo_o = {p: [-1 for ix, _, _ in available_test[p]] for p in preps}
-    if args.exec_robo_infile is not None:
-        print("Reading in robo execution ground truth labels from '" + args.exec_robo_infile + "'...")
-        df = pd.read_csv(args.exec_robo_infile)
+    if args.exec_robo_indir is not None:
+        print("Reading in robot execution ground truth labels from '" + args.exec_robo_indir + "'...")
         gt_labels = {p: {} for p in preps}
-        l2c = {"Y": 2, "M": 1, "N": 0}  # Matching 3 class split.
-        for idx in df.index:
-            k = '(' + ', '.join(df["pair"][idx].split(' + ')) + ')'
-            for p in preps:
-                if df[p][idx] in l2c:
-                    gt_labels[p][k] = l2c[df[p][idx]]
+        l2c = {"y": 2, "m": 1, "n": 0}  # Matching 3 class split.
+        for _, _, fns in os.walk(args.exec_robo_indir):
+            for fn in fns:
+                ps = fn.split('.')
+                if len(ps) >= 2 and ps[-1] == "csv" and ps[-2] == "labels":  # annotation file
+                    print("... reading annotations from '%s'..." % fn)
+                    num_annot = 0
+                    df = pd.read_csv(os.path.join(args.exec_robo_indir, fn))
+                    for idx in df.index:
+                        if type(df["Pair"][idx]) is not str or " + " not in df["Pair"][idx]:
+                            continue
+                        lp = df["Pair"][idx].strip().split(" + ")
+                        aidx = names.index(lp[0])
+                        bidx = names.index(lp[1])
+                        k = (aidx, bidx)
+                        try:
+                            nt = int(df["Num Trials"][idx])
+                        except ValueError:
+                            continue
+                        if nt > 0:
+                            for p in preps:
+                                al = l2c[df["GT %s" % p][idx].lower()]
+                                gt_labels[p][k] = al
+                            num_annot += 1
+                    print("...... done; read %d useful pair annotations" % num_annot)
+        # Tie annotations to label structure.
         for p in preps:
-            for fold, fold_struct, orig_struct in [["train", tr_robo_o, train],
-                                                   ["test", te_robo_o, test]]:
+            for fold, fold_struct, available in [["train", tr_robo_o, available_train],
+                                                 ["test", te_robo_o, available_test]]:
                 gt_found = 0
                 for idx in range(len(fold_struct[p])):
-                    key = "(%s, %s)" % (names[orig_struct[p]['ob1'][idx]], names[orig_struct[p]['ob2'][idx]])
+                    key = (available[p][idx][1], available[p][idx][2])
                     if key in gt_labels[p]:
                         fold_struct[p][idx] = gt_labels[p][key]
                         gt_found += 1
-                print("... done; %d / %d robot exeuction ground truth %s labels found for %s" %
+                print("... done; %d / %d robot execution ground truth %s labels found for %s" %
                       (gt_found, len(fold_struct[p]), fold, p))
 
-    # TODO: read in human execution ground truth labels.
+    # Read in human execution ground truth labels from annotation CSVs from multiple annotators and calculate agreement.
     tr_human_o = {p: [-1 for ix, _, _ in available_train[p]] for p in preps}
     te_human_o = {p: [-1 for ix, _, _ in available_test[p]] for p in preps}
     if args.exec_human_indir is not None:
@@ -114,7 +133,7 @@ def main(args):
         l2c = {"on": {"on": 1, "in": 0},
                "in": {"on": 1, "in": 1},
                "no": {"on": 0, "in": 0},
-               "same": None, "": None}
+               "same": None, "-": None, "": None}
         for _, _, fns in os.walk(args.exec_human_indir):
             for fn in fns:
                 ps = fn.split('.')
@@ -160,10 +179,12 @@ def main(args):
                     lfk[an].append(annotations[p][k][an])
             kappas = [cohen_kappa_score(lfk[ani], lfk[anj]) for ani in range(len(annotators) - 1)
                       for anj in range(ani + 1, len(annotators))]
-            print("...... inter-annotator Cohen's kappa avg for %s: %.3f +/- %.3f" % (p, np.average(kappas), np.std(kappas)))
+            print("...... inter-annotator Cohen's kappa avg for %s: %.3f +/- %.3f" % (p, np.average(kappas),
+                                                                                      np.std(kappas)))
             mvfk = [mv_annotations[p][k] for k in annotations[p]]
             kappas = [cohen_kappa_score(lfk[ani], mvfk) for ani in range(len(annotators))]
-            print("...... annotator vs MV Cohen's kappa avg for %s: %.3f +/- %.3f" % (p, np.average(kappas), np.std(kappas)))
+            print("...... annotator vs MV Cohen's kappa avg for %s: %.3f +/- %.3f" % (p, np.average(kappas),
+                                                                                      np.std(kappas)))
         # Tie annotations to label structure.
         for p in preps:
             for fold, fold_struct, available in [["train", tr_human_o, available_train],
@@ -338,8 +359,8 @@ if __name__ == "__main__":
                         help="input robot feature file")
     parser.add_argument('--rgbd_only', type=int, required=True,
                         help="whether to restrict to extracting rgbd data")
-    parser.add_argument('--exec_robo_infile', type=str, required=False,
-                        help="input csv of robot execution ground truth affordance labels")
+    parser.add_argument('--exec_robo_indir', type=str, required=False,
+                        help="input dir of robot execution ground truth affordance labels csvs")
     parser.add_argument('--exec_human_indir', type=str, required=False,
                         help="input dir of human annotator execution ground truth affordance labels csvs")
     parser.add_argument('--out_fn_prefix', type=str, required=True,
