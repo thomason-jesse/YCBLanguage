@@ -84,145 +84,12 @@ def run_cat_naive_bayes(fs, tr_f, tr_l, te_f, te_l,
     return get_acc(cm), cm, get_acc(trcm), trcm
 
 
-# Based on:
-# https://pytorch.org/tutorials/beginner/nlp/sequence_models_tutorial.html
-class LSTMTagger(nn.Module):
-
-    def __init__(self, width, vocab_size, num_classes):
-        super(LSTMTagger, self).__init__()
-        self.width = width
-        self.vocab_size = vocab_size
-        self.num_classes = num_classes
-
-        self.word_embeddings = nn.Embedding(vocab_size, width)
-        self.lstm_src = nn.LSTM(width, width)
-        self.lstm_des = nn.LSTM(width, width)
-        self.hidden2class = nn.Linear(width*2, num_classes)
-
-        self.hidden_src = self.init_hidden()
-        self.hidden_des = self.init_hidden()
-
-    def init_hidden(self):
-        return (torch.zeros(1, 1, self.width),
-                torch.zeros(1, 1, self.width))
-
-    def forward(self, res):
-        embeds_src = self.word_embeddings(res[0])
-        embeds_des = self.word_embeddings(res[0])
-        lstm_src_out, self.hidden_src = self.lstm_src(embeds_src.view(len(res[0]), 1, -1), self.hidden_src)
-        lstm_des_out, self.hidden_des = self.lstm_des(embeds_des.view(len(res[0]), 1, -1), self.hidden_des)
-        hcat = torch.cat((lstm_src_out, lstm_des_out), 0)
-        final_logits = self.hidden2class(hcat.view(len(res[0]), -1))[-1, :]
-        final_logits = final_logits.view(1, len(final_logits))
-        final_scores = F.softmax(final_logits, dim=1)
-        return final_scores, final_logits
-
-
-# Train an LSTM language encoder to predict the category label given language descriptions.
-# tr_f - lists of descriptions for training instances
-# tr_l - training labels
-# te_f - lists of descriptions for testing instances
-# te_l - testing labels
-# verbose - whether to print epoch-wise progress
-# epochs - number of epochs to train
-# width - width of the encoder LSTM
-# batch_size - number of training examples to run before gradient update
-# epochs - number of epochs to run over data; if None, runs over all data once
-def run_lang_2_label(maxlen, word_to_i,
-                     tr_enc_exps, tr_l, te_enc_exps, te_l,
-                     verbose=False, width=16, batch_size=100, epochs=None):
-
-    # Train on the cross product of every description of source and description of destination object.
-    if verbose:
-        print("L2L: preparing training and testing data...")
-    classes = []
-    tr_inputs = []
-    tr_outputs = []
-    p = nn.ConstantPad1d((0, maxlen), word_to_i["<_>"])
-    for idx in range(len(tr_enc_exps)):
-        for ridx in range(len(tr_enc_exps[idx][0])):
-            for rjdx in range(len(tr_enc_exps[idx][1])):
-                tr_inputs.append([p(torch.tensor(tr_enc_exps[idx][0][ridx], dtype=torch.long)),
-                                  p(torch.tensor(tr_enc_exps[idx][1][rjdx], dtype=torch.long))])
-                tr_outputs.append(tr_l[idx])
-                if tr_l[idx] not in classes:
-                    classes.append(tr_l[idx])
-    tr_outputs = torch.tensor(tr_outputs, dtype=torch.long).view(len(tr_outputs), 1)
-    if epochs is None:  # iterate given the batch size to cover all data at least once
-        epochs = int(np.ceil(len(tr_inputs) / float(batch_size)))
-
-    # At test time, run the model on the cross product of descriptions for the pair and sum logits.
-    te_inputs = []
-    for idx in range(len(te_enc_exps)):
-        pairs_in = []
-        for ridx in range(len(te_enc_exps[idx][0])):
-            for rjdx in range(len(te_enc_exps[idx][1])):
-                pairs_in.append([p(torch.tensor(te_enc_exps[idx][0][ridx], dtype=torch.long)),
-                                 p(torch.tensor(te_enc_exps[idx][1][rjdx], dtype=torch.long))])
-        te_inputs.append(pairs_in)
-    if verbose:
-        print("L2L: ... done")
-
-    # Train: train a neural model for a fixed number of epochs.
-    if verbose:
-        print("L2L: training on " + str(len(tr_inputs)) + " inputs with batch size " + str(batch_size) + " for " + str(epochs) + " epochs...")
-    m = LSTMTagger(width, len(word_to_i), len(classes))
-    loss_function = nn.CrossEntropyLoss(ignore_index=word_to_i['<_>'])
-    optimizer = optim.SGD(m.parameters(), lr=0.001)  # TODO: this could be touched up.
-    idxs = list(range(len(tr_inputs)))
-    np.random.shuffle(idxs)
-    tr_inputs = [tr_inputs[idx] for idx in idxs]
-    tr_outputs = tr_outputs[idxs, :]
-    idx = 0
-    for epoch in range(epochs):
-        tloss = 0
-        c = 0
-        while c < batch_size:
-            m.zero_grad()
-            m.hidden_src = m.init_hidden()
-            m.hidden_des = m.init_hidden()
-            _, logits = m(tr_inputs[idx])
-            loss = loss_function(logits, tr_outputs[idx])
-            tloss += loss.data.item()
-            loss.backward()
-            optimizer.step()  # this is fun!  these boots were made for walking, and that's just what they'll do
-            c += 1
-            idx += 1
-            if idx == len(tr_inputs):
-                idx = 0
-        tloss /= batch_size
-        print("... epoch " + str(epoch) + " train loss " + str(tloss))
-    if verbose:
-        print("L2L: ... done")
-
-    # Test: report accuracy after training.
-    if verbose:
-        print("L2L: calculating test-time accuracy...")
-    with torch.no_grad():
-        cm = np.zeros(shape=(len(classes), len(classes)))
-        trcm = np.zeros(shape=(len(classes), len(classes)))
-        for feats, labels, conmat in [[te_inputs, te_l, cm], [tr_inputs, tr_l, trcm]]:
-            for jdx in range(len(feats)):
-                slogits = torch.zeros(1, len(classes))
-                for vidx in range(len(feats[jdx])):
-                    _, logits = m(feats[jdx][vidx])
-                    slogits += logits
-                pc = slogits.max(1)[1]
-                conmat[labels[jdx]][pc] += 1
-    if verbose:
-        print("L2L: ... done")
-
-    # Return accuracy and cm.
-    return get_acc(cm), cm, get_acc(trcm), trcm
-
-
 # Run a GLoVe-based model (either perceptron or FF network with relu activations)
 # tr_inputs - feature vector inputs
 # tr_outputs - training labels
 # te_inputs - same as tr_f but for testing
 # te_outputs - testing labels
 # verbose - whether to print epoch-wise progress
-# Reference: https://github.com/jcjohnson/pytorch-examples/blob/master/nn/two_layer_net_nn.py
 def run_ff_model(dv, tr_inputs, tr_outputs, te_inputs, te_outputs,
                  inwidth, hidden_dim, outwidth,  # single hidden layer of specified size, projecting to outwidth classes
                  batch_size=None, epochs=None,
@@ -272,33 +139,45 @@ def run_ff_model(dv, tr_inputs, tr_outputs, te_inputs, te_outputs,
     np.random.shuffle(idxs)
     tr_inputs = [tr_inputs[idx] for idx in idxs]
     tro = tr_outputs[idxs, :]
-    idx = 0
+    result = None
     for epoch in range(epochs):
         tloss = 0
-        c = 0
-        trcm = np.zeros(shape=(outwidth, outwidth))  # note: calculates train acc only over curr batch
-        # TODO: fix this bonkers single-example-per-batch code.
-        while c < batch_size:
+        trcm = np.zeros(shape=(outwidth, outwidth))
+        tidx = 0
+        batches_run = 0
+        while tidx < len(tr_inputs):
             model.zero_grad()
-            logits = model(tr_inputs[idx])
-            loss = loss_function(logits.view(1, len(logits)), tro[idx].long())
+            batch_in = torch.zeros((batch_size, tr_inputs[0].shape[0])).to(dv)
+            batch_gold = torch.zeros(batch_size).to(dv)
+            for bidx in range(batch_size):
+                batch_in[bidx, :] = tr_inputs[tidx]
+                batch_gold[bidx] = tro[tidx][0]
+
+                tidx += 1
+                if tidx == len(tr_inputs):
+                    break
+
+            logits = model(batch_in)
+            loss = loss_function(logits, batch_gold.long())
             tloss += loss.data.item()
-            trcm[int(tro[idx])][int(logits.max(0)[1])] += 1
+            batches_run += 1
+
             loss.backward()
             optimizer.step()
-            c += 1
-            idx += 1
-            if idx == len(tr_inputs):
-                idx = 0
-        tloss /= batch_size
+
+            # Calculated per instance, not per pair (e.g., x5 examples, individual voting).
+            for jdx in range(logits.shape[0]):
+                trcm[int(batch_gold[jdx])][int(logits[jdx].argmax(0))] += 1
+
+        tloss /= batches_run
         tr_acc = get_acc(trcm)
 
         with torch.no_grad():
             cm = np.zeros(shape=(outwidth, outwidth))
             for jdx in range(len(te_inputs)):
                 logits = model(te_inputs[jdx])
-                pc = int(logits.max(0)[1])
-                cm[int(te_outputs[jdx])][pc] += 1
+                cm[int(te_outputs[jdx])][int(logits.argmax(0))] += 1
+
             acc = get_acc(cm)
             if best_acc is None or acc > best_acc:
                 best_acc = acc

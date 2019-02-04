@@ -240,6 +240,7 @@ def main(args):
                 im = normalize(im)
                 im = torch.unsqueeze(im, 0)
                 v = plm(im).detach().data.numpy().flatten()
+                v_width = len(v)
                 if names[idx] not in ob_to_vs:
                     ob_to_vs[names[idx]] = []
                 ob_to_vs[names[idx]].append(v)

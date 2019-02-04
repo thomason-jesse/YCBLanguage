@@ -274,7 +274,7 @@ def main(args):
                             t1dm = np.divide(np.ones_like(t1dm), t1dm, out=np.zeros_like(t1dm), where=t1dm != 0)
                             t0dm = np.divide(np.ones_like(t0dm), t0dm, out=np.zeros_like(t0dm), where=t0dm != 0)
                             rgbd_feats[f][int(ob1)][int(ob2)].append([(t1cm - t0cm).tolist(),
-                                                                      np.expand_dims(t1dm - t0dm, axis=0).tolist()]
+                                                                      np.expand_dims(t1dm - t0dm, axis=0).tolist()])
 
                         num_pairs[f] += 1
                         avg_trials[f] += len(d[k].keys())

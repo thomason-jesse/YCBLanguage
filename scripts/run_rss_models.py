@@ -26,6 +26,8 @@ def main(args, dv):
     # Near universals it would be better to read from data but which we're hard-coding.
     preps = ["in", "on"]
     modality_hidden_dim = 100  # fixed dimension to reduce RGBD, language, and vision representations to.
+    batch_size = 8  # TODO: hyperparam to set sensibly
+
 
     # labels to use.
     train_label = args.train_objective + "_label"
@@ -136,7 +138,6 @@ def main(args, dv):
             # Couple the RGB and D inputs to feed into the paired inputs of the conv network.
             tr_inputs = [[tr_inputs_rgb[p][idx], tr_inputs_d[p][idx]] for idx in range(len(tr_outputs[p]))]
             te_inputs = [[te_inputs_rgb[p][idx], te_inputs_d[p][idx]] for idx in range(len(te_outputs[p]))]
-            batch_size = 8  # TODO: hyperparam to set
 
             # Instantiate convolutional RGB and Depth models, then tie them together with a conv FF model.
             rgb_conv_model = ConvToLinearModel(dv, 3, modality_hidden_dim).to(dv)
@@ -257,17 +258,17 @@ def main(args, dv):
                 rs[-1][p] = run_ff_model(dv, tr_inputs_l[p], tr_outputs[p], te_inputs_l[p], te_outputs[p],
                                          tr_inputs_l[p].shape[1], modality_hidden_dim, len(classes),
                                          epochs=ff_epochs, dropout=ff_dropout, learning_rate=ff_lr, opt=ff_opt,
-                                         verbose=args.verbose)
+                                         verbose=args.verbose, batch_size=batch_size)
             else:
                 rs[-1][p] = []
-                for seed in ff_random_restarts:
-                    print("... with seed " + str(seed) + "...")
+                for seed in tqdm(ff_random_restarts):
+                    # print("... with seed " + str(seed) + "...")
                     np.random.seed(seed)
                     torch.manual_seed(seed)
-                    rs[-1][p] = run_ff_model(dv, tr_inputs_l[p], tr_outputs[p], te_inputs_l[p], te_outputs[p],
-                                             tr_inputs_l[p].shape[1], modality_hidden_dim, len(classes),
-                                             epochs=ff_epochs, dropout=ff_dropout, learning_rate=ff_lr, opt=ff_opt,
-                                             verbose=args.verbose)
+                    rs[-1][p].append(run_ff_model(dv, tr_inputs_l[p], tr_outputs[p], te_inputs_l[p], te_outputs[p],
+                                                  tr_inputs_l[p].shape[1], modality_hidden_dim, len(classes),
+                                                  epochs=ff_epochs, dropout=ff_dropout, learning_rate=ff_lr, opt=ff_opt,
+                                                  verbose=args.verbose, batch_size=batch_size))
         print("... done")
 
     if 'resnet' in models:
@@ -279,17 +280,17 @@ def main(args, dv):
                 rs[-1][p] = run_ff_model(dv, tr_inputs_v[p], tr_outputs[p], te_inputs_v[p], te_outputs[p],
                                          tr_inputs_v[p].shape[1], modality_hidden_dim, len(classes),
                                          epochs=ff_epochs, dropout=ff_dropout, learning_rate=ff_lr, opt=ff_opt,
-                                         verbose=args.verbose)
+                                         verbose=args.verbose, batch_size=batch_size)
             else:
                 rs[-1][p] = []
-                for seed in ff_random_restarts:
-                    print("... with seed " + str(seed) + "...")
+                for seed in tqdm(ff_random_restarts):
+                    # print("... with seed " + str(seed) + "...")
                     np.random.seed(seed)
                     torch.manual_seed(seed)
-                    rs[-1][p] = run_ff_model(dv, tr_inputs_v[p], tr_outputs[p], te_inputs_v[p], te_outputs[p],
-                                             tr_inputs_v[p].shape[1], modality_hidden_dim, len(classes),
-                                             epochs=ff_epochs, dropout=ff_dropout, learning_rate=ff_lr, opt=ff_opt,
-                                             verbose=args.verbose)
+                    rs[-1][p].append(run_ff_model(dv, tr_inputs_v[p], tr_outputs[p], te_inputs_v[p], te_outputs[p],
+                                                  tr_inputs_v[p].shape[1], modality_hidden_dim, len(classes),
+                                                  epochs=ff_epochs, dropout=ff_dropout, learning_rate=ff_lr, opt=ff_opt,
+                                                  verbose=args.verbose, batch_size=batch_size))
         print("... done")
 
     if ff_random_restarts is None:
