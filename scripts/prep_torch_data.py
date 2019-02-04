@@ -275,17 +275,20 @@ def main(args):
             te_f_rgbd = [rgbd_te[str(oidx)][str(ojdx)] for _, oidx, ojdx in available_test[p]]
 
             # Convert structured data into tensor inputs.
-            # TODO: should probably read these sizes out of the file, but they're very fixed to this data.
-            tr_inputs_rgb = np.zeros((len(available_train[p]), 1, 3, 48, 64))
-            tr_inputs_d = np.zeros((len(available_train[p]), 1, 1, 48, 64))
-            te_inputs_rgb = np.zeros((len(available_test[p]), 1, 3, 48, 64))
-            te_inputs_d = np.zeros((len(available_test[p]), 1, 1, 48, 64))
+            # Dimensions:
+            # 5 trials (maximum) per object pair
+            # 3 input channels for RGB, 1 for depth
+            # 48 x 64 is the region size downsampled from the camera.
+            tr_inputs_rgb = np.zeros((len(available_train[p]), 5, 3, 48, 64))
+            tr_inputs_d = np.zeros((len(available_train[p]), 5, 1, 48, 64))
+            te_inputs_rgb = np.zeros((len(available_test[p]), 5, 3, 48, 64))
+            te_inputs_d = np.zeros((len(available_test[p]), 5, 1, 48, 64))
             for rgb_in, d_in, orig_in in [[tr_inputs_rgb, tr_inputs_d, tr_f_rgbd],
                                           [te_inputs_rgb, te_inputs_d, te_f_rgbd]]:
                 for idx in range(len(orig_in)):
-                    # Convert RGB and D numpy arrays to tensors and add batch dimension at axis 0.
-                    rgb_in[idx] = torch.tensor(orig_in[idx][0], dtype=torch.float).unsqueeze(0).numpy()
-                    d_in[idx] = torch.tensor(orig_in[idx][1], dtype=torch.float).unsqueeze(0).numpy()
+                    # Convert RGB and D numpy arrays to tensors.
+                    rgb_in[idx] = torch.tensor(orig_in[idx][0], dtype=torch.float).numpy()
+                    d_in[idx] = torch.tensor(orig_in[idx][1], dtype=torch.float).numpy()
             print("...... done")
         else:
             tr_inputs_rgb = tr_inputs_d = te_inputs_rgb = te_inputs_d = None

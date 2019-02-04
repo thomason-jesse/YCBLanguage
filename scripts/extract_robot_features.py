@@ -263,20 +263,18 @@ def main(args):
                                                                                15, verbose=verbose,
                                                                                rad_before=False, d=dc))
                             # RGBD features.
-                            if ob1 not in rgbd_feats[f]:
+                            if int(ob1) not in rgbd_feats[f]:
                                 rgbd_feats[f][int(ob1)] = {}
-                            if ob2 not in rgbd_feats[f][ob1]:
-                                # Un-normalized distance between final and initial image in RGB and depth space.
-                                # For depth, record features delta of 1 / depth between final and initial image.
-                                # TODO: some kind of normalization of both RGB and depth data.
-                                # TODO: for christ sake this throws out all the other trials at least keep those around
-                                # TODO: either by averaging or by independent consideration as additional examples.
-                                # TODO: Gonna have to average over them to make the maybe labels make any sense, but
-                                # TODO: repeated instances will give just a whole lot more training data for the convs.
-                                t1dm = np.divide(np.ones_like(t1dm), t1dm, out=np.zeros_like(t1dm), where=t1dm != 0)
-                                t0dm = np.divide(np.ones_like(t0dm), t0dm, out=np.zeros_like(t0dm), where=t0dm != 0)
-                                rgbd_feats[f][int(ob1)][int(ob2)] = [(t1cm - t0cm).tolist(),
-                                                                     np.expand_dims(t1dm - t0dm, axis=0).tolist()]
+                            if int(ob2) not in rgbd_feats[f][int(ob1)]:
+                                rgbd_feats[f][int(ob1)][int(ob2)] = []
+
+                            # Un-normalized distance between final and initial image in RGB and depth space.
+                            # For depth, record features delta of 1 / depth between final and initial image.
+                            # TODO: some kind of normalization of both RGB and depth data.
+                            t1dm = np.divide(np.ones_like(t1dm), t1dm, out=np.zeros_like(t1dm), where=t1dm != 0)
+                            t0dm = np.divide(np.ones_like(t0dm), t0dm, out=np.zeros_like(t0dm), where=t0dm != 0)
+                            rgbd_feats[f][int(ob1)][int(ob2)].append([(t1cm - t0cm).tolist(),
+                                                                      np.expand_dims(t1dm - t0dm, axis=0).tolist()]
 
                         num_pairs[f] += 1
                         avg_trials[f] += len(d[k].keys())

@@ -13,6 +13,7 @@ from torchvision.models import resnet
 from torchvision.transforms import ToTensor
 from torchvision.transforms import Normalize
 from torchvision.transforms.functional import resize
+from tqdm import tqdm
 from utils import *
 
 
@@ -29,6 +30,7 @@ def main(args, dv):
     # labels to use.
     train_label = args.train_objective + "_label"
     test_label = args.test_objective + "_label"
+    models = args.models.split(',')
 
     # Read in torch-ready input data.
     print("Reading in torch-ready lists from json and converting them to tensors...")
@@ -47,12 +49,16 @@ def main(args, dv):
         with open(fn, 'r') as f:
             d = json.load(f)
 
+            # # Can round "maybe" (1, of 0,1,2) class down to "no" at training time if we're testing on RGBD data
+            # in general, if using five trial voting for Y/N instead of MC with M as a training example.
+            # |
             # Need to round "maybe" (1, of 0,1,2) class down to "no" at training time in mturk labels if test objective
             # is two-class Y/N (1/0) only 'human' labels.
-            if args.test_objective == "human" and args.train_objective == "mturk":
+            if (('rgbd' in models and args.rgbd_m_as_disagreement) or
+                    (args.test_objective == "human" and args.train_objective == "mturk")):
                 cmtr = d["train"][train_label].count([1])
-                d["train"][train_label] = [[1] if v[0] > 1 else [0] for v in d["train"][train_label]]
-                print("... for %s mturk training data, rounded %d Maybe labels down to No values" %
+                d["train"][train_label] = [[2] if v[0] > 1 else [0] for v in d["train"][train_label]]
+                print("... for %s training data, rounded %d Maybe labels down to No values" %
                       (p, cmtr))
 
             tr_outputs[p] = torch.tensor(keep_all_but(d["train"][train_label], d["train"][train_label], [-1]),
@@ -86,7 +92,6 @@ def main(args, dv):
         classes = list(train_classes.union(test_classes))
 
     print("... classes: " + str(classes))
-    models = args.models.split(',')
     bs = []
     rs = []
 
@@ -158,9 +163,9 @@ def main(args, dv):
             else:
                 seeds = ff_random_restarts
                 rs[-1][p] = []
-            for seed in seeds:
+            for seed in tqdm(seeds):
                 if seed is not None:
-                    print("... %s with seed %d ..." % (p, seed))
+                    # print("... %s with seed %d ..." % (p, seed))
                     np.random.seed(seed)
                     torch.manual_seed(seed)
 
@@ -170,6 +175,7 @@ def main(args, dv):
                 np.random.shuffle(idxs)
                 tr_inputs = [tr_inputs[idx] for idx in idxs]
                 tro = tr_outputs[p][idxs, :]
+                num_trials = tr_inputs_rgb[p][0].shape[0]  # examples per input
                 result = None
                 for epoch in range(ff_epochs):
                     tloss = 0
@@ -178,15 +184,15 @@ def main(args, dv):
                     batches_run = 0
                     while tidx < len(tr_inputs):
                         model.zero_grad()
-                        batch_in = [torch.zeros((batch_size, tr_inputs_rgb[p][0].shape[1],
+                        batch_in = [torch.zeros((batch_size * num_trials, tr_inputs_rgb[p][0].shape[1],
                                                  tr_inputs_rgb[p][0].shape[2], tr_inputs_rgb[p][0].shape[3])).to(dv),
-                                    torch.zeros((batch_size, tr_inputs_d[p][0].shape[1],
+                                    torch.zeros((batch_size * num_trials, tr_inputs_d[p][0].shape[1],
                                                  tr_inputs_d[p][0].shape[2], tr_inputs_d[p][0].shape[3])).to(dv)]
-                        batch_gold = torch.zeros(batch_size).to(dv)
+                        batch_gold = torch.zeros(batch_size * num_trials).to(dv)
                         for bidx in range(batch_size):
-                            batch_in[0][bidx, :, :, :] = tr_inputs_rgb[p][tidx].squeeze()
-                            batch_in[1][bidx, :] = tr_inputs_d[p][tidx].squeeze()
-                            batch_gold[bidx] = tro[tidx][0]
+                            batch_in[0][bidx:bidx+num_trials, :, :, :] = tr_inputs_rgb[p][tidx]
+                            batch_in[1][bidx:bidx+num_trials, :] = tr_inputs_d[p][tidx]
+                            batch_gold[bidx:bidx+num_trials] = np.repeat(tro[tidx][0], num_trials)
 
                             tidx += 1
                             if tidx == len(tr_inputs):
@@ -200,6 +206,7 @@ def main(args, dv):
                         loss.backward()
                         optimizer.step()
 
+                        # Calculated per instance, not per pair (e.g., x5 examples, individual voting).
                         for jdx in range(logits.shape[0]):
                             trcm[int(batch_gold[jdx])][int(logits[jdx].argmax(0))] += 1
 
@@ -209,8 +216,22 @@ def main(args, dv):
                     with torch.no_grad():
                         cm = np.zeros(shape=(len(classes), len(classes)))
                         for jdx in range(len(te_inputs)):
-                            logits = model(te_inputs[jdx])
-                            cm[int(te_outputs[p][jdx])][int(logits.max(1)[1])] += 1
+                            trials_logits = model(te_inputs[jdx])  # will be full batch size wide
+                            v = np.zeros(len(classes))
+                            for tdx in range(num_trials):  # take a vote over trials (not whole logit size)
+                                v[int(logits[tdx].argmax(0))] += 1
+                            
+                            if args.rgbd_m_as_disagreement:
+                                if v[1] == v[2] == 0:  # all votes are for class negative
+                                    cm[int(te_outputs[p][jdx])][0] += 1
+                                elif v[0] == v[1] == 0:  # all votes are for class positive
+                                    cm[int(te_outputs[p][jdx])][2] += 1
+                                else:  # votes are split among different classes, so conservatively vote maybe
+                                    cm[int(te_outputs[p][jdx])][1] += 1
+                            else:
+                                # If N/M/Y are all available, just use the majority vote across the trials
+                                # to decide the predicted label of the pair.
+                                cm[int(te_outputs[p][jdx])][int(v.argmax(0))] += 1
 
                         acc = get_acc(cm)
                         if best_acc is None or acc > best_acc:
@@ -332,6 +353,10 @@ if __name__ == "__main__":
                         help="either 'mturk', 'robo', or 'human'")
     parser.add_argument('--test_objective', type=str, required=True,
                         help="either 'mturk' or 'robo'")
+    parser.add_argument('--rgbd_m_as_disagreement', type=int, required=False,
+                        help=("if true, treat the M label as an inference-time-only classification that happens" +
+                              " when votes are split between Y/N on the trials available for a pair; at training time," +
+                              " the M labels are rounded down to N."))
     parser.add_argument('--verbose', type=int, required=False, default=0,
                         help="verbosity level")
     parser.add_argument('--hyperparam_infile', type=str, required=False,
