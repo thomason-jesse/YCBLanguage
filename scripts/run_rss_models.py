@@ -96,6 +96,8 @@ def main(args, dv):
     print("... classes: " + str(classes))
     bs = []
     rs = []
+    ff_random_restarts = None if args.ff_random_restarts is None else \
+        [int(s) for s in args.ff_random_restarts.split(',')]
 
     # Majority class baseline.
     if 'mc' in models:
@@ -106,6 +108,8 @@ def main(args, dv):
             rs[-1][p] = run_majority_class([int(c[0]) for c in tr_outputs[p].detach().data.cpu().numpy().tolist()],
                                            [int(c[0]) for c in te_outputs[p].detach().data.cpu().numpy().tolist()],
                                            len(classes))
+            if ff_random_restarts is not None:
+                rs[-1][p] = [rs[-1][p] for _ in range(len(ff_random_restarts))]
         print("... done")
 
     # Read in hyperparameters for feed forward networks or set defaults.
@@ -121,8 +125,6 @@ def main(args, dv):
         ff_dropout = 0
         ff_lr = 0.001
         ff_opt = 'sgd'
-    ff_random_restarts = None if args.ff_random_restarts is None else \
-        [int(s) for s in args.ff_random_restarts.split(',')]
 
     if 'rgbd' in models:
         print("Running RGBD models")
@@ -250,13 +252,13 @@ def main(args, dv):
         print("... done")
 
     if 'glove' in models:
-        print("Running GLoVe models")
-        bs.append("GLoVe FF")
+        print("Running GloVe models")
+        bs.append("GloVe FF")
         rs.append({})
         for p in preps:
             if ff_random_restarts is None:
                 rs[-1][p] = run_ff_model(dv, tr_inputs_l[p], tr_outputs[p], te_inputs_l[p], te_outputs[p],
-                                         tr_inputs_l[p].shape[1], modality_hidden_dim, len(classes),
+                                         tr_inputs_l[p].shape[1], modality_hidden_dim, len(classes), num_modalities=1,
                                          epochs=ff_epochs, dropout=ff_dropout, learning_rate=ff_lr, opt=ff_opt,
                                          verbose=args.verbose, batch_size=batch_size)
             else:
@@ -266,7 +268,7 @@ def main(args, dv):
                     np.random.seed(seed)
                     torch.manual_seed(seed)
                     rs[-1][p].append(run_ff_model(dv, tr_inputs_l[p], tr_outputs[p], te_inputs_l[p], te_outputs[p],
-                                                  tr_inputs_l[p].shape[1], modality_hidden_dim, len(classes),
+                                                  tr_inputs_l[p].shape[1], modality_hidden_dim, len(classes), num_modalities=1,
                                                   epochs=ff_epochs, dropout=ff_dropout, learning_rate=ff_lr, opt=ff_opt,
                                                   verbose=args.verbose, batch_size=batch_size))
         print("... done")
@@ -278,7 +280,7 @@ def main(args, dv):
         for p in preps:
             if ff_random_restarts is None:
                 rs[-1][p] = run_ff_model(dv, tr_inputs_v[p], tr_outputs[p], te_inputs_v[p], te_outputs[p],
-                                         tr_inputs_v[p].shape[1], modality_hidden_dim, len(classes),
+                                         tr_inputs_v[p].shape[1], modality_hidden_dim, len(classes), num_modalities=1,
                                          epochs=ff_epochs, dropout=ff_dropout, learning_rate=ff_lr, opt=ff_opt,
                                          verbose=args.verbose, batch_size=batch_size)
             else:
@@ -288,7 +290,31 @@ def main(args, dv):
                     np.random.seed(seed)
                     torch.manual_seed(seed)
                     rs[-1][p].append(run_ff_model(dv, tr_inputs_v[p], tr_outputs[p], te_inputs_v[p], te_outputs[p],
-                                                  tr_inputs_v[p].shape[1], modality_hidden_dim, len(classes),
+                                                  tr_inputs_v[p].shape[1], modality_hidden_dim, len(classes), num_modalities=1,
+                                                  epochs=ff_epochs, dropout=ff_dropout, learning_rate=ff_lr, opt=ff_opt,
+                                                  verbose=args.verbose, batch_size=batch_size))
+        print("... done")
+
+    if 'glove' in models and 'resnet' in models:
+        print("Running GloVe+ResNet FF models")
+        bs.append("GloVe+ResNet FF")
+        rs.append({})
+        for p in preps:
+            if ff_random_restarts is None:
+                rs[-1][p] = run_ff_model(dv, [tr_inputs_l[p], tr_inputs_v[p]], tr_outputs[p],
+                                         [te_inputs_l[p], te_inputs_v[p]], te_outputs[p],
+                                         None, modality_hidden_dim, len(classes), num_modalities=2,
+                                         epochs=ff_epochs, dropout=ff_dropout, learning_rate=ff_lr, opt=ff_opt,
+                                         verbose=args.verbose, batch_size=batch_size)
+            else:
+                rs[-1][p] = []
+                for seed in tqdm(ff_random_restarts):
+                    # print("... with seed " + str(seed) + "...")
+                    np.random.seed(seed)
+                    torch.manual_seed(seed)
+                    rs[-1][p].append(run_ff_model(dv, [tr_inputs_l[p], tr_inputs_v[p]], tr_outputs[p],
+                                                  [te_inputs_l[p], te_inputs_v[p]], te_outputs[p],
+                                                  None, modality_hidden_dim, len(classes), num_modalities=2,
                                                   epochs=ff_epochs, dropout=ff_dropout, learning_rate=ff_lr, opt=ff_opt,
                                                   verbose=args.verbose, batch_size=batch_size))
         print("... done")

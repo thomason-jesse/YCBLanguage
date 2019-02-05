@@ -84,7 +84,7 @@ def run_cat_naive_bayes(fs, tr_f, tr_l, te_f, te_l,
     return get_acc(cm), cm, get_acc(trcm), trcm
 
 
-# Run a GLoVe-based model (either perceptron or FF network with relu activations)
+# Run a GloVe-based model (either perceptron or FF network with relu activations)
 # tr_inputs - feature vector inputs
 # tr_outputs - training labels
 # te_inputs - same as tr_f but for testing
@@ -92,6 +92,7 @@ def run_cat_naive_bayes(fs, tr_f, tr_l, te_f, te_l,
 # verbose - whether to print epoch-wise progress
 def run_ff_model(dv, tr_inputs, tr_outputs, te_inputs, te_outputs,
                  inwidth, hidden_dim, outwidth,  # single hidden layer of specified size, projecting to outwidth classes
+                 num_modalities,  # If greater than 1, uses EarlyFusionModel to implement, else simple single hidden layer.
                  batch_size=None, epochs=None,
                  dropout=0, learning_rate=0.001, opt='sgd',
                  verbose=False):
@@ -111,9 +112,15 @@ def run_ff_model(dv, tr_inputs, tr_outputs, te_inputs, te_outputs,
     if verbose:
         print("FF: constructing model...")
     # TODO: these dropout layers might be in a stupid place.
-    lr = [nn.Linear(inwidth, hidden_dim), torch.nn.Dropout(dropout), torch.nn.ReLU(),
-          nn.Linear(hidden_dim, outwidth), torch.nn.Dropout(dropout), ]
-    model = nn.Sequential(*lr).to(dv)
+    if num_modalities == 1:
+        lr = [nn.Linear(inwidth, hidden_dim), torch.nn.ReLU(), torch.nn.Dropout(dropout), 
+              nn.Linear(hidden_dim, outwidth)]
+        model = nn.Sequential(*lr).to(dv)
+        mparams = model.parameters()
+    else:
+        widths = [len(tr_inputs[midx][0]) for midx in range(num_modalities)]
+        model = EarlyFusionFFModel(dv, widths, hidden_dim, dropout, outwidth)
+        mparams = model.param_list
     if verbose:
         print("FF: ... done")
 
@@ -124,20 +131,28 @@ def run_ff_model(dv, tr_inputs, tr_outputs, te_inputs, te_outputs,
     loss_function = nn.CrossEntropyLoss()
 
     if opt == 'sgd':
-        optimizer = optim.SGD(model.parameters(), lr=learning_rate)
+        optimizer = optim.SGD(mparams, lr=learning_rate)
     elif opt == 'adagrad':
-        optimizer = optim.Adagrad(model.parameters(), lr=learning_rate)
+        optimizer = optim.Adagrad(mparams, lr=learning_rate)
     elif opt == 'adam':
-        optimizer = optim.Adam(model.parameters(), lr=learning_rate)
+        optimizer = optim.Adam(mparams, lr=learning_rate)
     elif opt == 'rmsprop':
-        optimizer = optim.RMSprop(model.parameters(), lr=learning_rate)
+        optimizer = optim.RMSprop(mparams, lr=learning_rate)
     else:
         raise ValueError('Unrecognized opt specification "' + opt + '".')
 
     best_acc = best_cm = tr_acc_at_best = trcm_at_best = None
     idxs = list(range(len(tr_inputs)))
     np.random.shuffle(idxs)
-    tr_inputs = [tr_inputs[idx] for idx in idxs]
+    if num_modalities == 1:
+        tr_inputs = [tr_inputs[idx] for idx in idxs]
+        num_tr = len(tr_inputs)
+        num_te = len(te_inputs)
+    else:
+        for midx in range(num_modalities):
+            tr_inputs[midx] = [tr_inputs[midx][idx] for idx in idxs]
+            num_tr = len(tr_inputs[midx])
+            num_te = len(te_inputs[midx])
     tro = tr_outputs[idxs, :]
     result = None
     for epoch in range(epochs):
@@ -145,16 +160,25 @@ def run_ff_model(dv, tr_inputs, tr_outputs, te_inputs, te_outputs,
         trcm = np.zeros(shape=(outwidth, outwidth))
         tidx = 0
         batches_run = 0
-        while tidx < len(tr_inputs):
+        while tidx < num_tr:
             model.zero_grad()
-            batch_in = torch.zeros((batch_size, tr_inputs[0].shape[0])).to(dv)
+            if num_modalities == 1:
+                batch_in = torch.zeros((batch_size, tr_inputs[0].shape[0])).to(dv)
+            else:
+                batch_in = []
+                for midx in range(num_modalities):
+                    batch_in.append(torch.zeros((batch_size, tr_inputs[midx][0].shape[0])).to(dv))
             batch_gold = torch.zeros(batch_size).to(dv)
             for bidx in range(batch_size):
-                batch_in[bidx, :] = tr_inputs[tidx]
+                if num_modalities == 1:
+                    batch_in[bidx, :] = tr_inputs[tidx]
+                else:
+                    for midx in range(num_modalities):
+                        batch_in[midx][bidx, :] = tr_inputs[midx][tidx]
                 batch_gold[bidx] = tro[tidx][0]
 
                 tidx += 1
-                if tidx == len(tr_inputs):
+                if tidx == num_tr:
                     break
 
             logits = model(batch_in)
@@ -174,9 +198,19 @@ def run_ff_model(dv, tr_inputs, tr_outputs, te_inputs, te_outputs,
 
         with torch.no_grad():
             cm = np.zeros(shape=(outwidth, outwidth))
-            for jdx in range(len(te_inputs)):
-                logits = model(te_inputs[jdx])
-                cm[int(te_outputs[jdx])][int(logits.argmax(0))] += 1
+            for jdx in range(num_te):
+                if num_modalities == 1:
+                    tein = te_inputs[jdx]
+                    logit_am_dim = 0
+                else:
+                    tein = []
+                    for midx in range(num_modalities):
+                        tein.append(torch.zeros((1, te_inputs[midx][0].shape[0])).to(dv))
+                    for midx in range(num_modalities):
+                        tein[midx][0, :] = te_inputs[midx][jdx]
+                    logit_am_dim = 1
+                logits = model(tein)
+                cm[int(te_outputs[jdx])][int(logits.argmax(logit_am_dim))] += 1
 
             acc = get_acc(cm)
             if best_acc is None or acc > best_acc:
@@ -198,40 +232,29 @@ def run_ff_model(dv, tr_inputs, tr_outputs, te_inputs, te_outputs,
 # https://pytorch.org/tutorials/beginner/nlp/sequence_models_tutorial.html
 class EarlyFusionFFModel(nn.Module):
 
+    # adds FC shrinking layers on all but smallest modality to shrink them to smallest before fusion
     # modality_widths - list of input widths, e.g., [300, 1000] means first input width 300, second 1000
-    # shrink_to_min - add FC shrinking layers on all but smallest modality to shrink them to smallest before fusion
-    # hidden_layer_widths - list of hidden layer widths between fusion and prediction (possibly empty)
+    # hidden_layer_width - hidden layer width after fusion before prediction
     # dropout - the dropout rate to add before hidden layer connections
     # num_classes - the number of classes to predict over in the output layer.
-    def __init__(self, dv, modality_widths, shrink_to_min, hidden_layer_widths, dropout, num_classes):
+    def __init__(self, dv, modality_widths, hidden_layer_width, dropout, num_classes):
         super(EarlyFusionFFModel, self).__init__()
         self.param_list = []
         self.num_modalities = len(modality_widths)
 
         # Add shrinking layers to bring larger modality inputs to smallest input width before fusion.
-        if shrink_to_min and len(set(modality_widths)) != 1:
-            target_width = min(modality_widths)
-            self.shrink_layers = {sidx: nn.Linear(modality_widths[sidx], target_width).to(dv)
-                                  for sidx in range(len(modality_widths)) if modality_widths[sidx] > target_width}
-            input_cat_width = target_width * len(modality_widths)
-        else:
-            self.shrink_layers = {}
-            input_cat_width = sum(modality_widths)
+        target_width = min(modality_widths)
+        self.shrink_layers = {sidx: nn.Linear(modality_widths[sidx], target_width).to(dv)
+                              for sidx in range(len(modality_widths)) if modality_widths[sidx] > target_width}
+        input_cat_width = target_width * len(modality_widths)
+
         for sidx in self.shrink_layers:
             self.param_list.extend(list(self.shrink_layers[sidx].parameters()))
 
         # In forward pass, inputs are then concatenated and fed to a number (possibly zero) of hidden layers.
-        if len(hidden_layer_widths) > 0:
-            self.hidden_layers = [nn.Linear(input_cat_width, hidden_layer_widths[0]).to(dv)]
-            for idx in range(1, len(hidden_layer_widths)):
-                self.hidden_layers.append(torch.nn.ReLU())
-                if dropout > 0:
-                    self.hidden_layers.append(torch.nn.Dropout(dropout))
-                self.hidden_layers.append(nn.Linear(hidden_layer_widths[idx - 1], hidden_layer_widths[idx]).to(dv))
-            self.hidden_layers.append(torch.nn.ReLU())
-            self.hidden_layers.append(nn.Linear(hidden_layer_widths[-1], num_classes).to(dv))
-        else:
-            self.hidden_layers = [nn.Linear(input_cat_width, num_classes).to(dv)]  # e.g., no hidden layers just in->out
+        self.hidden_layers = [nn.Linear(input_cat_width, hidden_layer_width).to(dv),
+                              torch.nn.ReLU().to(dv), torch.nn.Dropout(dropout).to(dv),
+                              nn.Linear(hidden_layer_width, num_classes).to(dv)]
         for hl in self.hidden_layers:
             self.param_list.extend(list(hl.parameters()))
 
@@ -243,7 +266,7 @@ class EarlyFusionFFModel(nn.Module):
                     for sidx in range(self.num_modalities)]
 
         # Concatenate inputs.
-        cat_inputs = torch.cat(s_inputs, 0)
+        cat_inputs = torch.cat(s_inputs, 1)  # concatenate along the feature dimension (batch is dim 0)
 
         # Feed concatenation through hidden layers and predict classes.
         ff_inputs = [cat_inputs]
