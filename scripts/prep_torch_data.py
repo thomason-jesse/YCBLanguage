@@ -18,6 +18,7 @@ from utils import *
 
 def main(args):
     assert not args.rgbd_only or args.exec_robo_indir is not None
+    num_expected_trials = 5  # discards pairs with fewer than 5 trials
 
     # Read in labeled folds.
     print("Reading in labeled folds from '" + args.infile + "'...")
@@ -61,11 +62,13 @@ def main(args):
             available_train[p] = [[ix, train[p]["ob1"][ix], train[p]["ob2"][ix]]
                                   for ix in range(len(train[p]["ob1"]))
                                   if str(train[p]["ob1"][ix]) in rgbd_tr and
-                                  str(train[p]["ob2"][ix]) in rgbd_tr[str(train[p]["ob1"][ix])]]
+                                  str(train[p]["ob2"][ix]) in rgbd_tr[str(train[p]["ob1"][ix])] and
+                                  len(rgbd_tr[str(train[p]["ob1"][ix])][str(train[p]["ob2"][ix])][0]) == num_expected_trials]
             available_test[p] = [[ix, test[p]["ob1"][ix], test[p]["ob2"][ix]]
                                  for ix in range(len(test[p]["ob1"]))
                                  if str(test[p]["ob1"][ix]) in rgbd_te and
-                                 str(test[p]["ob2"][ix]) in rgbd_te[str(test[p]["ob1"][ix])]]
+                                 str(test[p]["ob2"][ix]) in rgbd_te[str(test[p]["ob1"][ix])] and
+                                  len(rgbd_te[str(test[p]["ob1"][ix])][str(test[p]["ob2"][ix])][0]) == num_expected_trials]
             print("... done; %d / %d available training and %d / %d available testing examples with RGBD data for %s" %
                   (len(available_train[p]), len(train[p]["ob1"]), len(available_test[p]), len(test[p]["ob1"]), p))
         else:

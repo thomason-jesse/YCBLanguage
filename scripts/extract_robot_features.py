@@ -218,7 +218,8 @@ def main(args):
 
     # Get training and testing data.
     feats = {f: {p: {} for p in preps} for f in folds}
-    rgbd_feats = {f: {} for f in folds}  # fold, ob1, ob2, [rgb, depth] feature input maps
+    rgbd_feats = {f: {} for f in folds}  # fold, ob1, ob2, [[rgb, depth], ...] feature input maps per trial
+    rgbd_seen = {f: {} for f in folds}  # fold, ob1, ob2, prep which preposition first seen by
     for p in preps:
         print("Collating available train/test data for '" + p + "'...")
         num_pairs = {f: 0 for f in folds}
@@ -262,19 +263,23 @@ def main(args):
                             feats[f][p][ob1][ob2].append(depthmaps_to_features(d[k][trial]['center_point'],
                                                                                15, verbose=verbose,
                                                                                rad_before=False, d=dc))
-                            # RGBD features.
+
+                            # RGBD features only need to be calculated once per preposition.
                             if int(ob1) not in rgbd_feats[f]:
                                 rgbd_feats[f][int(ob1)] = {}
+                                rgbd_seen[f][int(ob1)] = {}
                             if int(ob2) not in rgbd_feats[f][int(ob1)]:
-                                rgbd_feats[f][int(ob1)][int(ob2)] = []
+                                rgbd_feats[f][int(ob1)][int(ob2)] = [[], []]  # RGB, D, parralel by trial
+                                rgbd_seen[f][int(ob1)][int(ob2)] = p
 
-                            # Un-normalized distance between final and initial image in RGB and depth space.
-                            # For depth, record features delta of 1 / depth between final and initial image.
                             # TODO: some kind of normalization of both RGB and depth data.
-                            t1dm = np.divide(np.ones_like(t1dm), t1dm, out=np.zeros_like(t1dm), where=t1dm != 0)
-                            t0dm = np.divide(np.ones_like(t0dm), t0dm, out=np.zeros_like(t0dm), where=t0dm != 0)
-                            rgbd_feats[f][int(ob1)][int(ob2)].append([(t1cm - t0cm).tolist(),
-                                                                      np.expand_dims(t1dm - t0dm, axis=0).tolist()])
+                            if rgbd_seen[f][int(ob1)][int(ob2)] == p:
+                                # Un-normalized distance between final and initial image in RGB and depth space.
+                                rgbd_feats[f][int(ob1)][int(ob2)][0].append((t1cm - t0cm).tolist())
+                                # For depth, record features delta of 1 / depth between final and initial image.
+                                t1dm = np.divide(np.ones_like(t1dm), t1dm, out=np.zeros_like(t1dm), where=t1dm != 0)
+                                t0dm = np.divide(np.ones_like(t0dm), t0dm, out=np.zeros_like(t0dm), where=t0dm != 0)
+                                rgbd_feats[f][int(ob1)][int(ob2)][1].append(np.expand_dims(t1dm - t0dm, axis=0).tolist())
 
                         num_pairs[f] += 1
                         avg_trials[f] += len(d[k].keys())
