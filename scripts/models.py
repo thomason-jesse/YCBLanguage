@@ -142,13 +142,15 @@ def run_ff_model(dv, tr_inputs, tr_outputs, te_inputs, te_outputs,
         raise ValueError('Unrecognized opt specification "' + opt + '".')
 
     best_acc = best_cm = tr_acc_at_best = trcm_at_best = None
-    idxs = list(range(len(tr_inputs)))
-    np.random.shuffle(idxs)
     if num_modalities == 1:
+        idxs = list(range(len(tr_inputs)))
+        np.random.shuffle(idxs)
         tr_inputs = [tr_inputs[idx] for idx in idxs]
         num_tr = len(tr_inputs)
         num_te = len(te_inputs)
     else:
+        idxs = list(range(len(tr_inputs[0])))
+        np.random.shuffle(idxs)
         for midx in range(num_modalities):
             tr_inputs[midx] = [tr_inputs[midx][idx] for idx in idxs]
             num_tr = len(tr_inputs[midx])
