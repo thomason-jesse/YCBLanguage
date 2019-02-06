@@ -25,7 +25,7 @@ def main(args, dv):
 
     # Near universals it would be better to read from data but which we're hard-coding.
     preps = ["in", "on"]
-    modality_hidden_dim = 100  # fixed dimension to reduce RGBD, language, and vision representations to.
+    modality_hidden_dim = 300  # fixed dimension to reduce RGBD, language, and vision representations to.
     batch_size = 8  # TODO: hyperparam to set sensibly
 
 
@@ -222,7 +222,7 @@ def main(args, dv):
                             trials_logits = model(te_inputs[jdx])  # will be full batch size wide
                             v = np.zeros(len(classes))
                             for tdx in range(num_trials):  # take a vote over trials (not whole logit size)
-                                v[int(logits[tdx].argmax(0))] += 1
+                                v[int(trials_logits[tdx].argmax(0))] += 1
                             
                             if args.rgbd_m_as_disagreement:
                                 if v[1] == v[2] == 0:  # all votes are for class negative

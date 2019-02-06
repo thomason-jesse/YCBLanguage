@@ -244,11 +244,10 @@ class EarlyFusionFFModel(nn.Module):
         self.param_list = []
         self.num_modalities = len(modality_widths)
 
-        # Add shrinking layers to bring larger modality inputs to smallest input width before fusion.
-        target_width = min(modality_widths)
-        self.shrink_layers = {sidx: nn.Linear(modality_widths[sidx], target_width).to(dv)
-                              for sidx in range(len(modality_widths)) if modality_widths[sidx] > target_width}
-        input_cat_width = target_width * len(modality_widths)
+        # Add shrinking layers to bring larger modality inputs to hidden layer width.
+        self.shrink_layers = {sidx: nn.Linear(modality_widths[sidx], hidden_layer_width).to(dv)
+                              for sidx in range(len(modality_widths)) if modality_widths[sidx] > hidden_layer_width}
+        input_cat_width = hidden_layer_width * len(modality_widths)
 
         for sidx in self.shrink_layers:
             self.param_list.extend(list(self.shrink_layers[sidx].parameters()))
@@ -268,15 +267,46 @@ class EarlyFusionFFModel(nn.Module):
                     for sidx in range(self.num_modalities)]
 
         # Concatenate inputs.
-        cat_inputs = torch.cat(s_inputs, 1)  # concatenate along the feature dimension (batch is dim 0)
+        # cat_inputs = torch.cat(s_inputs, 1)  # concatenate along the feature dimension (batch is dim 0)
 
         # Feed concatenation through hidden layers and predict classes.
-        ff_inputs = [cat_inputs]
-        for hl in self.hidden_layers:
-            ff_inputs.append(hl(ff_inputs[-1]))
-        logits = ff_inputs[-1]
+        # ff_inputs = [cat_inputs]
+        # for hl in self.hidden_layers:
+        #     ff_inputs.append(hl(ff_inputs[-1]))
+        # logits = ff_inputs[-1]
+
+        # Hidden layer as a simple dot between modalities demonstrably improves performance on Dev.
+        logits = self.hidden_layers[-1](s_inputs[0] * s_inputs[1])
 
         return logits
+
+# DEBUG - stats before hidden dot (Glove+ResNet)
+# Results:
+#  Majority Class:
+#   in:   acc 0.660+/-0.000       (train: 0.610+/-0.000)
+#         f1  0.737+/-0.000       (train: 0.678+/-0.000)
+#   on:   acc 0.460+/-0.000       (train: 0.386+/-0.000)
+#         f1  0.533+/-0.000       (train: 0.474+/-0.000)
+#  GloVe+ResNet FF:
+#   in:   acc 0.661+/-0.003       (train: 0.582+/-0.038)
+#         f1  0.739+/-0.003       (train: 0.649+/-0.040)
+#   on:   acc 0.527+/-0.024       (train: 0.556+/-0.084)
+#         f1  0.568+/-0.029       (train: 0.580+/-0.098)
+
+# 300 dim hidden (using)
+# GloVe+ResNet FF:
+#   in:   acc 0.682+/-0.015       (train: 0.732+/-0.079)
+#         f1  0.746+/-0.017       (train: 0.807+/-0.079)
+#   on:   acc 0.541+/-0.012       (train: 0.711+/-0.059)
+#         f1  0.594+/-0.016       (train: 0.750+/-0.055)
+
+# 100 dim hidden (shrink both L and V to h, then dot to get combined h)
+# GloVe+ResNet FF:
+#   in:   acc 0.676+/-0.022       (train: 0.628+/-0.099)
+#         f1  0.748+/-0.027       (train: 0.702+/-0.102)
+#   on:   acc 0.536+/-0.022       (train: 0.609+/-0.051)
+#         f1  0.604+/-0.026       (train: 0.647+/-0.065)
+
 
 
 class ConvFFModel(nn.Module):
@@ -305,10 +335,12 @@ class ConvToLinearModel(nn.Module):
         out_channels_factor = 2
         kernel = (3, 3)
         stride = (3, 3)
-        self.enc1 = torch.nn.Conv2d(channels, out_channels_factor * channels, kernel, stride=1).to(dv)
+        self.enc1 = torch.nn.Conv2d(channels,
+                                    channels * out_channels_factor,
+                                    kernel, stride=1).to(dv)
         self.mp1 = torch.nn.MaxPool2d(kernel, stride=stride).to(dv)
         self.relu1 = torch.nn.ReLU().to(dv)
-        self.enc2 = torch.nn.Conv2d(out_channels_factor * channels,
+        self.enc2 = torch.nn.Conv2d(channels * out_channels_factor,
                                     channels * out_channels_factor * out_channels_factor,
                                     kernel).to(dv)
         self.mp2 = torch.nn.MaxPool2d(kernel, stride=stride).to(dv)
@@ -342,6 +374,7 @@ class ConvToLinearModel(nn.Module):
         eim = self.mp3(eim)
         eim = self.relu3(eim)
         # print("mp3\t" + str(eim.shape))  # DEBUG
+        # TODO: is this im.shape[0] necessary? is that... the batch? seems wonky.
         fc_in = eim.view((im.shape[0], self.final_output_channels * self.conv_out_dim[0] * self.conv_out_dim[1]))
         # print("view\t" + str(fc_in.shape))  # DEBUG
         h = self.fc(fc_in)

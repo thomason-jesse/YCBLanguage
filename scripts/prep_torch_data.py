@@ -298,8 +298,10 @@ def main(args):
             tr_inputs_rgb = tr_inputs_d = te_inputs_rgb = te_inputs_d = None
 
         print("... preparing GloVe inputs...")
-        tr_inputs_l = np.zeros((len(available_train[p]), l_width * 2))
-        te_inputs_l = np.zeros((len(available_test[p]), l_width * 2))
+        # tr_inputs_l = np.zeros((len(available_train[p]), l_width * 2))  # concatenate
+        # te_inputs_l = np.zeros((len(available_test[p]), l_width * 2))  # concatenate
+        tr_inputs_l = np.zeros((len(available_train[p]), l_width))  # diff
+        te_inputs_l = np.zeros((len(available_test[p]), l_width))  # diff
         tr_f_l = [[res[oidx], res[ojdx]] for _, oidx, ojdx in available_train[p]]
         te_f_l = [[res[oidx], res[ojdx]] for _, oidx, ojdx in available_test[p]]
         for model_in, orig_in in [[tr_inputs_l, tr_f_l], [te_inputs_l, te_f_l]]:
@@ -310,13 +312,16 @@ def main(args):
                 avg_ob1_v = np.sum([g[w] for w in ob1_tks], axis=0) / len(ob1_tks)
                 ob2_tks = [tk for re in orig_in[idx][1] for tk in re]
                 avg_ob2_v = np.sum([g[w] for w in ob2_tks], axis=0) / len(ob2_tks)
-                incat = np.concatenate((avg_ob1_v, avg_ob2_v))
-                model_in[idx] = torch.tensor(incat, dtype=torch.float).numpy()
+                # inl = np.concatenate((avg_ob1_v, avg_ob2_v))  # concatenate
+                inl = avg_ob1_v - avg_ob2_v  # diff
+                model_in[idx] = torch.tensor(inl, dtype=torch.float).numpy()
         print("...... done")
 
         print("... preparing ResNet inputs...")
-        tr_inputs_v = np.zeros((len(available_train[p]), v_width * 2))
-        te_inputs_v = np.zeros((len(available_test[p]), v_width * 2))
+        # tr_inputs_v = np.zeros((len(available_train[p]), v_width * 2))  # concatenate
+        # te_inputs_v = np.zeros((len(available_test[p]), v_width * 2))  # concatenate
+        tr_inputs_v = np.zeros((len(available_train[p]), v_width))  # diff
+        te_inputs_v = np.zeros((len(available_test[p]), v_width))  # diff
         tr_f_v = [[oidx, ojdx] for _, oidx, ojdx in available_train[p]]
         te_f_v = [[oidx, ojdx] for _, oidx, ojdx in available_test[p]]
         for model_in, orig_in in [[tr_inputs_v, tr_f_v], [te_inputs_v, te_f_v]]:
@@ -325,8 +330,9 @@ def main(args):
                 # as its representation, and represent the pair as the concatenation of those two averages.
                 avg_ob1_v = np.sum(ob_to_vs[names[orig_in[idx][0]]], axis=0) / len(ob_to_vs[names[orig_in[idx][0]]])
                 avg_ob2_v = np.sum(ob_to_vs[names[orig_in[idx][1]]], axis=0) / len(ob_to_vs[names[orig_in[idx][1]]])
-                incat = np.concatenate((avg_ob1_v, avg_ob2_v))
-                model_in[idx] = torch.tensor(incat, dtype=torch.float).numpy()
+                # inv = np.concatenate((avg_ob1_v, avg_ob2_v))  # concatenate
+                inv = avg_ob1_v - avg_ob2_v  # diff
+                model_in[idx] = torch.tensor(inv, dtype=torch.float).numpy()
         print("...... done")
 
         # Write resulting vectors to json file as numpy.
