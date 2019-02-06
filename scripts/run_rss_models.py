@@ -173,7 +173,7 @@ def main(args, dv):
                     torch.manual_seed(seed)
 
                 # Run training for specified number of epochs.
-                best_acc = best_cm = tr_acc_at_best = trcm_at_best = None
+                best_acc = best_cm = tr_acc_at_best = trcm_at_best = tloss_at_best = t_epochs = None
                 idxs = list(range(len(tr_inputs)))
                 np.random.shuffle(idxs)
                 tr_inputs = [tr_inputs[idx] for idx in idxs]
@@ -242,8 +242,10 @@ def main(args, dv):
                             best_cm = cm
                             tr_acc_at_best = tr_acc
                             trcm_at_best = trcm
+                            tloss_at_best = tloss
+                            t_epochs = epoch + 1  # record how many epochs of training have happened at this time
 
-                    result = best_acc, best_cm, tr_acc_at_best, trcm_at_best
+                    result = best_acc, best_cm, tr_acc_at_best, trcm_at_best, tloss_at_best, t_epochs
 
                 if seed is None:
                     rs[-1][p] = result
@@ -325,7 +327,8 @@ def main(args, dv):
         for idx in range(len(bs)):
             print(" " + bs[idx] + ":")
             for p in preps:
-                print("  " + p + ":\tacc %0.3f" % rs[idx][p][0] + "\t(train: %0.3f" % rs[idx][p][2] + ")")
+                print("  " + p + ":\tacc %0.3f" % rs[idx][p][0] +
+                      "\t(train: %0.3f; loss: %f; epochs %d" % (rs[idx][p][2], rs[idx][p][4], rs[idx][p][5]) + ")")
                 print("  \tf1  %0.3f" % get_f1(rs[idx][p][1]) + "\t(train: %0.3f" % get_f1(rs[idx][p][3]) + ")")
                 print('\t(TeCM\t' + '\n\t\t'.join(['\t'.join([str(int(ct)) for ct in rs[idx][p][1][i]])
                                                  for i in range(len(rs[idx][p][1]))]) + ")")
@@ -352,10 +355,16 @@ def main(args, dv):
                 std_f1 = np.std([get_f1(rs[idx][p][jdx][1]) for jdx in range(len(ff_random_restarts))])
                 avg_tr_f1 = np.average([get_f1(rs[idx][p][jdx][3]) for jdx in range(len(ff_random_restarts))])
                 std_tr_f1 = np.std([get_f1(rs[idx][p][jdx][3]) for jdx in range(len(ff_random_restarts))])
+                avg_tr_loss = np.average([rs[idx][p][jdx][4] for jdx in range(len(ff_random_restarts))])
+                std_tr_loss = np.std([rs[idx][p][jdx][4] for jdx in range(len(ff_random_restarts))])
+                avg_tr_epoch = np.average([rs[idx][p][jdx][5] for jdx in range(len(ff_random_restarts))])
+                std_tr_epoch = np.std([rs[idx][p][jdx][5] for jdx in range(len(ff_random_restarts))])
                 print("  " + p + ":\tacc %0.3f+/-%0.3f" % (avg_acc, std_acc) +
                       "\t(train: %0.3f+/-%0.3f" % (avg_tr_acc, std_tr_acc) + ")")
                 print("  \tf1  %0.3f+/-%0.3f" % (avg_f1, std_f1) +
                       "\t(train: %0.3f+/-%0.3f" % (avg_tr_f1, std_tr_f1) + ")")
+                print("  \ttrain loss %.3f+/-%.3f" % (avg_tr_loss, std_tr_loss))
+                print("  \ttrain epochs %.3f+/-%.3f" % (avg_tr_epoch, std_tr_epoch))
 
         # Write out results for all seeds so that a downstream script can process them for stat sig.
         if args.perf_outfile is not None:

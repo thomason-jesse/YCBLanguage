@@ -32,7 +32,7 @@ def run_majority_class(tr_l, te_l, num_classes):
             conmat[l][mc] += 1
 
     # Return accuracy and cm.
-    return get_acc(cm), cm, get_acc(trcm), trcm
+    return get_acc(cm), cm, get_acc(trcm), trcm, 0, 1
 
 
 # A naive bayes implementation that assumes known categorical feature values.
@@ -81,7 +81,7 @@ def run_cat_naive_bayes(fs, tr_f, tr_l, te_f, te_l,
         print("NB: ... done")
 
     # Return accuracy and cm.
-    return get_acc(cm), cm, get_acc(trcm), trcm
+    return get_acc(cm), cm, get_acc(trcm), trcm, None
 
 
 # Run a GloVe-based model (either perceptron or FF network with relu activations)
@@ -141,7 +141,7 @@ def run_ff_model(dv, tr_inputs, tr_outputs, te_inputs, te_outputs,
     else:
         raise ValueError('Unrecognized opt specification "' + opt + '".')
 
-    best_acc = best_cm = tr_acc_at_best = trcm_at_best = None
+    best_acc = best_cm = tr_acc_at_best = trcm_at_best = tloss_at_best = t_epochs = None
     if num_modalities == 1:
         idxs = list(range(len(tr_inputs)))
         np.random.shuffle(idxs)
@@ -220,6 +220,8 @@ def run_ff_model(dv, tr_inputs, tr_outputs, te_inputs, te_outputs,
                 best_cm = cm
                 tr_acc_at_best = tr_acc
                 trcm_at_best = trcm
+                tloss_at_best = tloss
+                t_epochs = epoch
 
         if verbose:
             print("... epoch " + str(epoch) + " train loss " + str(tloss) + "; train accuracy " + str(tr_acc) +
@@ -227,7 +229,7 @@ def run_ff_model(dv, tr_inputs, tr_outputs, te_inputs, te_outputs,
     if verbose:
         print("FF: ... done")
 
-    return best_acc, best_cm, tr_acc_at_best, trcm_at_best
+    return best_acc, best_cm, tr_acc_at_best, trcm_at_best, tloss_at_best, t_epochs
 
 
 # Based on:
