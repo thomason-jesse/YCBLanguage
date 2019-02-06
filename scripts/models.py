@@ -6,6 +6,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
+import os
 from functools import reduce
 from utils import *
 
@@ -85,12 +86,15 @@ def run_cat_naive_bayes(fs, tr_f, tr_l, te_f, te_l,
 
 
 # Run a GloVe-based model (either perceptron or FF network with relu activations)
+# outdir - directory to save best-performing models during training
+# model_desc - string description of model for filename
 # tr_inputs - feature vector inputs
 # tr_outputs - training labels
 # te_inputs - same as tr_f but for testing
 # te_outputs - testing labels
 # verbose - whether to print epoch-wise progress
-def run_ff_model(dv, tr_inputs, tr_outputs, te_inputs, te_outputs,
+def run_ff_model(dv, outdir, model_desc,
+                 tr_inputs, tr_outputs, te_inputs, te_outputs,
                  inwidth, hidden_dim, outwidth,  # single hidden layer of specified size, projecting to outwidth classes
                  num_modalities,  # If greater than 1, uses EarlyFusionModel to implement, else simple single hidden layer.
                  batch_size=None, epochs=None,
@@ -111,8 +115,8 @@ def run_ff_model(dv, tr_inputs, tr_outputs, te_inputs, te_outputs,
     # Construct the model with specified number of hidden layers / dimensions (or none) and relu activations between.
     if verbose:
         print("FF: constructing model...")
-    # TODO: these dropout layers might be in a stupid place.
     if num_modalities == 1:
+        # TODO: these dropout layers might be in a stupid place.
         lr = [nn.Linear(inwidth, hidden_dim), torch.nn.ReLU(), torch.nn.Dropout(dropout), 
               nn.Linear(hidden_dim, outwidth)]
         model = nn.Sequential(*lr).to(dv)
@@ -157,6 +161,7 @@ def run_ff_model(dv, tr_inputs, tr_outputs, te_inputs, te_outputs,
             num_te = len(te_inputs[midx])
     tro = tr_outputs[idxs, :]
     result = None
+    last_saved_fn = None
     for epoch in range(epochs):
         tloss = 0
         trcm = np.zeros(shape=(outwidth, outwidth))
@@ -222,6 +227,14 @@ def run_ff_model(dv, tr_inputs, tr_outputs, te_inputs, te_outputs,
                 trcm_at_best = trcm
                 tloss_at_best = tloss
                 t_epochs = epoch
+
+                # Save best-performing model at this seed
+                # (overwritten each time better perf happens across epochs)
+                fn = os.path.join(outdir, "%s_acc-%.3f.pt" % (model_desc, best_acc))
+                torch.save(model.state_dict(), fn)
+                if last_saved_fn is not None:  # remove previous save
+                    os.system("rm %s" % last_saved_fn)
+                last_saved_fn = fn
 
         if verbose:
             print("... epoch " + str(epoch) + " train loss " + str(tloss) + "; train accuracy " + str(tr_acc) +

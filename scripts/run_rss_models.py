@@ -180,6 +180,7 @@ def main(args, dv):
                 tro = tr_outputs[p][idxs, :]
                 num_trials = tr_inputs_rgb[p][0].shape[0]  # examples per input
                 result = None
+                last_saved_fn = None
                 for epoch in range(ff_epochs):
                     tloss = 0
                     trcm = np.zeros(shape=(len(classes), len(classes)))
@@ -245,6 +246,18 @@ def main(args, dv):
                             tloss_at_best = tloss
                             t_epochs = epoch + 1  # record how many epochs of training have happened at this time
 
+                            # Save best-performing model at this seed
+                            if seed is not None:
+                                fn = os.path.join(args.outdir, "p-%s_m-rgbd_tr-%s_te-%s_s-%s_acc-%.3f.pt" %
+                                    (p, args.train_objective, args.test_objective, seed, best_acc))
+                            else:
+                                fn = os.path.join(args.outdir, "p-%s_m-rgbd_tr-%s_te-%s_acc-%.3f.pt" %
+                                    (p, args.train_objective, args.test_objective, best_acc))
+                            torch.save(model.state_dict(), fn)
+                            if last_saved_fn is not None:  # remove previous save
+                                os.system("rm %s" % last_saved_fn)
+                            last_saved_fn = fn
+
                     result = best_acc, best_cm, tr_acc_at_best, trcm_at_best, tloss_at_best, t_epochs
 
                 if seed is None:
@@ -259,7 +272,9 @@ def main(args, dv):
         rs.append({})
         for p in preps:
             if ff_random_restarts is None:
-                rs[-1][p] = run_ff_model(dv, tr_inputs_l[p], tr_outputs[p], te_inputs_l[p], te_outputs[p],
+                model_desc = "p-%s_m-glove_tr-%s_te-%s" % (p, args.train_objective, args.test_objective)
+                rs[-1][p] = run_ff_model(dv, args.outdir, model_desc,
+                                         tr_inputs_l[p], tr_outputs[p], te_inputs_l[p], te_outputs[p],
                                          tr_inputs_l[p].shape[1], modality_hidden_dim, len(classes), num_modalities=1,
                                          epochs=ff_epochs, dropout=ff_dropout, learning_rate=ff_lr, opt=ff_opt,
                                          verbose=args.verbose, batch_size=batch_size)
@@ -269,7 +284,9 @@ def main(args, dv):
                     # print("... with seed " + str(seed) + "...")
                     np.random.seed(seed)
                     torch.manual_seed(seed)
-                    rs[-1][p].append(run_ff_model(dv, tr_inputs_l[p], tr_outputs[p], te_inputs_l[p], te_outputs[p],
+                    model_desc = "p-%s_m-glove_tr-%s_te-%s_s-%s" % (p, args.train_objective, args.test_objective, seed)
+                    rs[-1][p].append(run_ff_model(dv, args.outdir, model_desc,
+                                                  tr_inputs_l[p], tr_outputs[p], te_inputs_l[p], te_outputs[p],
                                                   tr_inputs_l[p].shape[1], modality_hidden_dim, len(classes), num_modalities=1,
                                                   epochs=ff_epochs, dropout=ff_dropout, learning_rate=ff_lr, opt=ff_opt,
                                                   verbose=args.verbose, batch_size=batch_size))
@@ -281,7 +298,9 @@ def main(args, dv):
         rs.append({})
         for p in preps:
             if ff_random_restarts is None:
-                rs[-1][p] = run_ff_model(dv, tr_inputs_v[p], tr_outputs[p], te_inputs_v[p], te_outputs[p],
+                model_desc = "p-%s_m-resnet_tr-%s_te-%s" % (p, args.train_objective, args.test_objective)
+                rs[-1][p] = run_ff_model(dv, args.outdir, model_desc,
+                                         tr_inputs_v[p], tr_outputs[p], te_inputs_v[p], te_outputs[p],
                                          tr_inputs_v[p].shape[1], modality_hidden_dim, len(classes), num_modalities=1,
                                          epochs=ff_epochs, dropout=ff_dropout, learning_rate=ff_lr, opt=ff_opt,
                                          verbose=args.verbose, batch_size=batch_size)
@@ -291,7 +310,9 @@ def main(args, dv):
                     # print("... with seed " + str(seed) + "...")
                     np.random.seed(seed)
                     torch.manual_seed(seed)
-                    rs[-1][p].append(run_ff_model(dv, tr_inputs_v[p], tr_outputs[p], te_inputs_v[p], te_outputs[p],
+                    model_desc = "p-%s_m-resnet_tr-%s_te-%s_s-%s" % (p, args.train_objective, args.test_objective, seed)
+                    rs[-1][p].append(run_ff_model(dv, args.outdir, model_desc,
+                                                  tr_inputs_v[p], tr_outputs[p], te_inputs_v[p], te_outputs[p],
                                                   tr_inputs_v[p].shape[1], modality_hidden_dim, len(classes), num_modalities=1,
                                                   epochs=ff_epochs, dropout=ff_dropout, learning_rate=ff_lr, opt=ff_opt,
                                                   verbose=args.verbose, batch_size=batch_size))
@@ -303,7 +324,9 @@ def main(args, dv):
         rs.append({})
         for p in preps:
             if ff_random_restarts is None:
-                rs[-1][p] = run_ff_model(dv, [tr_inputs_l[p], tr_inputs_v[p]], tr_outputs[p],
+                model_desc = "p-%s_m-glove+resnet_tr-%s_te-%s" % (p, args.train_objective, args.test_objective)
+                rs[-1][p] = run_ff_model(dv, args.outdir, model_desc,
+                                         [tr_inputs_l[p], tr_inputs_v[p]], tr_outputs[p],
                                          [te_inputs_l[p], te_inputs_v[p]], te_outputs[p],
                                          None, modality_hidden_dim, len(classes), num_modalities=2,
                                          epochs=ff_epochs, dropout=ff_dropout, learning_rate=ff_lr, opt=ff_opt,
@@ -314,7 +337,9 @@ def main(args, dv):
                     # print("... with seed " + str(seed) + "...")
                     np.random.seed(seed)
                     torch.manual_seed(seed)
-                    rs[-1][p].append(run_ff_model(dv, [tr_inputs_l[p], tr_inputs_v[p]], tr_outputs[p],
+                    model_desc = "p-%s_m-glove+resnet_tr-%s_te-%s_s-%s" % (p, args.train_objective, args.test_objective, seed)
+                    rs[-1][p].append(run_ff_model(dv, args.outdir, model_desc,
+                                                  [tr_inputs_l[p], tr_inputs_v[p]], tr_outputs[p],
                                                   [te_inputs_l[p], te_inputs_v[p]], te_outputs[p],
                                                   None, modality_hidden_dim, len(classes), num_modalities=2,
                                                   epochs=ff_epochs, dropout=ff_dropout, learning_rate=ff_lr, opt=ff_opt,
@@ -389,6 +414,8 @@ if __name__ == "__main__":
                         help="either 'mturk', 'robo', or 'human'")
     parser.add_argument('--test_objective', type=str, required=True,
                         help="either 'mturk' or 'robo'")
+    parser.add_argument('--outdir', type=str, required=True,
+                        help="directory to save trained model state_dicts to")
     parser.add_argument('--rgbd_m_as_disagreement', type=int, required=False,
                         help=("if true, treat the M label as an inference-time-only classification that happens" +
                               " when votes are split between Y/N on the trials available for a pair; at training time," +
