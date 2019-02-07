@@ -119,6 +119,7 @@ def run_ff_model(dv, outdir, model_desc,
         # TODO: these dropout layers might be in a stupid place.
         lr = [nn.Linear(inwidth, hidden_dim), torch.nn.ReLU(), torch.nn.Dropout(dropout), 
               nn.Linear(hidden_dim, outwidth)]
+        fusion_model = None
         model = nn.Sequential(*lr).to(dv)
         mparams = model.parameters()
     else:
@@ -169,6 +170,7 @@ def run_ff_model(dv, outdir, model_desc,
         tidx = 0
         batches_run = 0
         while tidx < num_tr:
+            model.train()
             model.zero_grad()
             if num_modalities == 1:
                 batch_in = torch.zeros((batch_size, tr_inputs[0].shape[0])).to(dv)
@@ -205,6 +207,7 @@ def run_ff_model(dv, outdir, model_desc,
         tr_acc = get_acc(trcm)
 
         with torch.no_grad():
+            model.eval()
             cm = np.zeros(shape=(outwidth, outwidth))
             for jdx in range(num_te):
                 if num_modalities == 1:
@@ -233,9 +236,14 @@ def run_ff_model(dv, outdir, model_desc,
                 # (overwritten each time better perf happens across epochs)
                 fn = os.path.join(outdir, "%s_acc-%.3f.pt" % (model_desc, best_acc))
                 torch.save(model.state_dict(), fn)
+                if fusion_model is not None:
+                    torch.save(fusion_model.state_dict(), fn+".fm")
                 if last_saved_fn is not None:  # remove previous save
                     os.system("rm %s" % last_saved_fn)
+                    if fusion_model is not None:
+                        os.system("rm %s.fm" % last_saved_fn)
                 last_saved_fn = fn
+
 
         if verbose:
             print("... epoch " + str(epoch) + " train loss " + str(tloss) + "; train accuracy " + str(tr_acc) +

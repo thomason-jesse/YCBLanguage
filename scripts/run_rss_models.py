@@ -142,25 +142,6 @@ def main(args, dv):
             tr_inputs = [[tr_inputs_rgb[p][idx], tr_inputs_d[p][idx]] for idx in range(len(tr_outputs[p]))]
             te_inputs = [[te_inputs_rgb[p][idx], te_inputs_d[p][idx]] for idx in range(len(te_outputs[p]))]
 
-            # Instantiate convolutional RGB and Depth models, then tie them together with a conv FF model.
-            rgb_conv_model = ConvToLinearModel(dv, 3, modality_hidden_dim).to(dv)
-            depth_conv_model = ConvToLinearModel(dv, 1, modality_hidden_dim).to(dv)
-            model = ConvFFModel(dv, [rgb_conv_model, depth_conv_model], modality_hidden_dim * 2, len(classes)).to(dv)
-
-            # Instantiate loss and optimizer.
-            # TODO: optimizer is a hyperparam to set.
-            loss_function = nn.CrossEntropyLoss()
-            if ff_opt == 'sgd':
-                optimizer = optim.SGD(model.param_list, lr=ff_lr)
-            elif ff_opt == 'adagrad':
-                optimizer = optim.Adagrad(model.param_list, lr=ff_lr)
-            elif ff_opt == 'adam':
-                optimizer = optim.Adam(model.param_list, lr=ff_lr)
-            elif ff_opt == 'rmsprop':
-                optimizer = optim.RMSprop(model.param_list, lr=ff_lr)
-            else:
-                raise ValueError('Unrecognized opt specification "' + ff_opt + '".')
-
             # Train model.
             if ff_random_restarts is None:
                 seeds = [None]
@@ -172,6 +153,25 @@ def main(args, dv):
                     # print("... %s with seed %d ..." % (p, seed))
                     np.random.seed(seed)
                     torch.manual_seed(seed)
+
+                # Instantiate convolutional RGB and Depth models, then tie them together with a conv FF model.
+                rgb_conv_model = ConvToLinearModel(dv, 3, modality_hidden_dim).to(dv)
+                depth_conv_model = ConvToLinearModel(dv, 1, modality_hidden_dim).to(dv)
+                model = ConvFFModel(dv, [rgb_conv_model, depth_conv_model], modality_hidden_dim * 2, len(classes)).to(dv)
+
+                # Instantiate loss and optimizer.
+                # TODO: optimizer is a hyperparam to set.
+                loss_function = nn.CrossEntropyLoss()
+                if ff_opt == 'sgd':
+                    optimizer = optim.SGD(model.param_list, lr=ff_lr)
+                elif ff_opt == 'adagrad':
+                    optimizer = optim.Adagrad(model.param_list, lr=ff_lr)
+                elif ff_opt == 'adam':
+                    optimizer = optim.Adam(model.param_list, lr=ff_lr)
+                elif ff_opt == 'rmsprop':
+                    optimizer = optim.RMSprop(model.param_list, lr=ff_lr)
+                else:
+                    raise ValueError('Unrecognized opt specification "' + ff_opt + '".')
 
                 # Run training for specified number of epochs.
                 best_acc = best_cm = tr_acc_at_best = trcm_at_best = tloss_at_best = t_epochs = None
@@ -187,6 +187,7 @@ def main(args, dv):
                     tidx = 0
                     batches_run = 0
                     while tidx < len(tr_inputs):
+                        model.train()
                         model.zero_grad()
                         batch_in = [torch.zeros((batch_size * num_trials, tr_inputs[0][0].shape[1],
                                                  tr_inputs[0][0].shape[2], tr_inputs[0][0].shape[3])).to(dv),
@@ -218,6 +219,7 @@ def main(args, dv):
                     tr_acc = get_acc(trcm)
 
                     with torch.no_grad():
+                        model.eval()
                         cm = np.zeros(shape=(len(classes), len(classes)))
                         for jdx in range(len(te_inputs)):
                             trials_logits = model(te_inputs[jdx])  # will be full batch size wide
@@ -318,7 +320,7 @@ def main(args, dv):
                                                   verbose=args.verbose, batch_size=batch_size))
         print("... done")
 
-    if 'glove' in models and 'resnet' in models:
+    if 'glove+resnet' in models:
         print("Running GloVe+ResNet FF models")
         bs.append("GloVe+ResNet FF")
         rs.append({})
@@ -346,7 +348,7 @@ def main(args, dv):
                                                   verbose=args.verbose, batch_size=batch_size))
         print("... done")
 
-    if 'rgbd' in models and 'glove' in models and 'resnet' in models:
+    if 'rgbd+glove+resnet' in models:
         print("Running RGBD+GloVe+ResNet models")
         bs.append("RGBD+GloVe+ResNet")
         rs.append({})
@@ -363,30 +365,9 @@ def main(args, dv):
             te_inputs = [[te_inputs_rgb[p][idx], te_inputs_d[p][idx], te_inputs_l[p][idx], te_inputs_v[p][idx]]
                          for idx in range(len(te_outputs[p]))]
 
-            # Instantiate convolutional RGB and Depth models, then tie them together with a conv FF model.
-            rgb_conv_model = ConvToLinearModel(dv, 3, modality_hidden_dim).to(dv)
-            depth_conv_model = ConvToLinearModel(dv, 1, modality_hidden_dim).to(dv)
-            l_v_widths = [len(tr_inputs[0][2]), len(tr_inputs[0][3])]
-            fusion_model = EarlyFusionFFModel(dv, l_v_widths, modality_hidden_dim, ff_dropout).to(dv)
-            # TODO: could shear this up so RGBD and L+V get equal size representations (right now RGBD is twice the size)
-            model = ConvFusionPred(dv, [rgb_conv_model, depth_conv_model], modality_hidden_dim * 2,
-                                   fusion_model, modality_hidden_dim, len(classes)).to(dv)
-
-            # Instantiate loss and optimizer.
-            # TODO: optimizer is a hyperparam to set.
-            loss_function = nn.CrossEntropyLoss()
-            if ff_opt == 'sgd':
-                optimizer = optim.SGD(model.param_list, lr=ff_lr)
-            elif ff_opt == 'adagrad':
-                optimizer = optim.Adagrad(model.param_list, lr=ff_lr)
-            elif ff_opt == 'adam':
-                optimizer = optim.Adam(model.param_list, lr=ff_lr)
-            elif ff_opt == 'rmsprop':
-                optimizer = optim.RMSprop(model.param_list, lr=ff_lr)
-            else:
-                raise ValueError('Unrecognized opt specification "' + ff_opt + '".')
-
             # Train model.
+            if args.lv_pretrained_fns is not None:
+                print("... loading pretrained model weights for glove+resnet from '" + lv_pretrained_fn + "'...")
             if ff_random_restarts is None:
                 seeds = [None]
             else:
@@ -397,6 +378,34 @@ def main(args, dv):
                     # print("... %s with seed %d ..." % (p, seed))
                     np.random.seed(seed)
                     torch.manual_seed(seed)
+
+                # Instantiate convolutional RGB and Depth models, then tie them together with a conv FF model.
+                rgb_conv_model = ConvToLinearModel(dv, 3, modality_hidden_dim).to(dv)
+                depth_conv_model = ConvToLinearModel(dv, 1, modality_hidden_dim).to(dv)
+                l_v_widths = [len(tr_inputs[0][2]), len(tr_inputs[0][3])]
+                fusion_model = EarlyFusionFFModel(dv, l_v_widths, modality_hidden_dim, ff_dropout).to(dv)
+
+                if args.lv_pretrained_fns is not None:
+                    lv_pretrained_fn = args.lv_pretrained_fns.split(',')[0] if p == 'on' else args.lv_pretrained_fns.split(',')[1]
+                    fusion_model.load_state_dict(torch.load(lv_pretrained_fn))
+
+                # TODO: could shear this up so RGBD and L+V get equal size representations (right now RGBD is twice the size)
+                model = ConvFusionPred(dv, [rgb_conv_model, depth_conv_model], modality_hidden_dim * 2,
+                                       fusion_model, modality_hidden_dim, len(classes)).to(dv)
+
+                # Instantiate loss and optimizer.
+                # TODO: optimizer is a hyperparam to set.
+                loss_function = nn.CrossEntropyLoss()
+                if ff_opt == 'sgd':
+                    optimizer = optim.SGD(model.param_list, lr=ff_lr)
+                elif ff_opt == 'adagrad':
+                    optimizer = optim.Adagrad(model.param_list, lr=ff_lr)
+                elif ff_opt == 'adam':
+                    optimizer = optim.Adam(model.param_list, lr=ff_lr)
+                elif ff_opt == 'rmsprop':
+                    optimizer = optim.RMSprop(model.param_list, lr=ff_lr)
+                else:
+                    raise ValueError('Unrecognized opt specification "' + ff_opt + '".')
 
                 # Run training for specified number of epochs.
                 best_acc = best_cm = tr_acc_at_best = trcm_at_best = tloss_at_best = t_epochs = None
@@ -412,6 +421,7 @@ def main(args, dv):
                     tidx = 0
                     batches_run = 0
                     while tidx < len(tr_inputs):
+                        model.train()
                         model.zero_grad()
                         batch_in = [torch.zeros((batch_size * num_trials, tr_inputs[0][0].shape[1],
                                                  tr_inputs[0][0].shape[2], tr_inputs[0][0].shape[3])).to(dv),
@@ -448,6 +458,7 @@ def main(args, dv):
                     tr_acc = get_acc(trcm)
 
                     with torch.no_grad():
+                        model.eval()
                         cm = np.zeros(shape=(len(classes), len(classes)))
                         for jdx in range(len(te_inputs)):
 
@@ -571,6 +582,8 @@ if __name__ == "__main__":
                         help="either 'mturk' or 'robo'")
     parser.add_argument('--outdir', type=str, required=True,
                         help="directory to save trained model state_dicts to")
+    parser.add_argument('--lv_pretrained_fns', type=str, required=False,
+                        help="pretrained state dict files for a L+V model to use with rgbd+glove+resent (on,in)")
     parser.add_argument('--rgbd_m_as_disagreement', type=int, required=False,
                         help=("if true, treat the M label as an inference-time-only classification that happens" +
                               " when votes are split between Y/N on the trials available for a pair; at training time," +
