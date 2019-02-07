@@ -123,7 +123,8 @@ def run_ff_model(dv, outdir, model_desc,
         mparams = model.parameters()
     else:
         widths = [len(tr_inputs[midx][0]) for midx in range(num_modalities)]
-        model = EarlyFusionFFModel(dv, widths, hidden_dim, dropout, outwidth)
+        fusion_model = EarlyFusionFFModel(dv, widths, hidden_dim, dropout).to(dv)
+        model = FusionPredModel(dv, fusion_model, hidden_dim, outwidth).to(dv)
         mparams = model.param_list
     if verbose:
         print("FF: ... done")
@@ -245,6 +246,21 @@ def run_ff_model(dv, outdir, model_desc,
     return best_acc, best_cm, tr_acc_at_best, trcm_at_best, tloss_at_best, t_epochs
 
 
+class FusionPredModel(nn.Module):
+
+    def __init__(self, dv, fusion_input, fusion_output_size, num_classes):
+        super(FusionPredModel, self).__init__()
+        self.fusion_input = fusion_input
+        self.out = torch.nn.Linear(fusion_output_size, num_classes).to(dv)
+        self.param_list = list(self.out.parameters())
+        self.param_list.extend(list(fusion_input.parameters()))
+
+    def forward(self, ins):
+        h = self.fusion_input(ins)
+        logits = self.out(h)
+        return logits
+
+
 # Based on:
 # https://pytorch.org/tutorials/beginner/nlp/sequence_models_tutorial.html
 class EarlyFusionFFModel(nn.Module):
@@ -254,12 +270,13 @@ class EarlyFusionFFModel(nn.Module):
     # hidden_layer_width - hidden layer width after fusion before prediction
     # dropout - the dropout rate to add before hidden layer connections
     # num_classes - the number of classes to predict over in the output layer.
-    def __init__(self, dv, modality_widths, hidden_layer_width, dropout, num_classes):
+    def __init__(self, dv, modality_widths, hidden_layer_width, dropout):
         super(EarlyFusionFFModel, self).__init__()
         self.param_list = []
         self.num_modalities = len(modality_widths)
 
         # Add shrinking layers to bring larger modality inputs to hidden layer width.
+        # TODO: relu on shrinking layer or just linear?
         self.shrink_layers = {sidx: nn.Linear(modality_widths[sidx], hidden_layer_width).to(dv)
                               for sidx in range(len(modality_widths)) if modality_widths[sidx] > hidden_layer_width}
         input_cat_width = hidden_layer_width * len(modality_widths)
@@ -269,8 +286,7 @@ class EarlyFusionFFModel(nn.Module):
 
         # In forward pass, inputs are then concatenated and fed to a number (possibly zero) of hidden layers.
         self.hidden_layers = [nn.Linear(input_cat_width, hidden_layer_width).to(dv),
-                              torch.nn.ReLU().to(dv), torch.nn.Dropout(dropout).to(dv),
-                              nn.Linear(hidden_layer_width, num_classes).to(dv)]
+                              torch.nn.ReLU().to(dv), torch.nn.Dropout(dropout).to(dv)]
         for hl in self.hidden_layers:
             self.param_list.extend(list(hl.parameters()))
 
@@ -282,7 +298,7 @@ class EarlyFusionFFModel(nn.Module):
                     for sidx in range(self.num_modalities)]
 
         # Concatenate inputs.
-        # cat_inputs = torch.cat(s_inputs, 1)  # concatenate along the feature dimension (batch is dim 0)
+        # cat_inputs = torch.cat(s_inputs, dim=1)  # concatenate along the feature dimension (batch is dim 0)
 
         # Feed concatenation through hidden layers and predict classes.
         # ff_inputs = [cat_inputs]
@@ -291,9 +307,12 @@ class EarlyFusionFFModel(nn.Module):
         # logits = ff_inputs[-1]
 
         # Hidden layer as a simple dot between modalities demonstrably improves performance on Dev.
-        logits = self.hidden_layers[-1](s_inputs[0] * s_inputs[1])
+        # logits = self.hidden_layers[-1](s_inputs[0] * s_inputs[1])
 
-        return logits
+        # Hidden layer as a simple dot between modalities demonstrably improves performance on Dev.
+        h = s_inputs[0] * s_inputs[1]
+
+        return h
 
 # DEBUG - stats before hidden dot (Glove+ResNet)
 # Results:
@@ -326,11 +345,10 @@ class EarlyFusionFFModel(nn.Module):
 
 class ConvFFModel(nn.Module):
 
-    # TODO: Tie this to general EarlyFusionModel instead of using directly for prediction (to use with L, V)
-    def __init__(self, dv, conv_inputs, conv_inputs_size, num_classes):
+    def __init__(self, dv, conv_inputs, conv_outputs_size, num_classes):
         super(ConvFFModel, self).__init__()
         self.conv_inputs = conv_inputs
-        self.out = torch.nn.Linear(conv_inputs_size, num_classes).to(dv)
+        self.out = torch.nn.Linear(conv_outputs_size, num_classes).to(dv)
         self.param_list = list(self.out.parameters())
         for m in self.conv_inputs:
             self.param_list.extend(list(m.parameters()))
@@ -338,7 +356,7 @@ class ConvFFModel(nn.Module):
     def forward(self, ins):
         hcat = self.conv_inputs[0](ins[0])
         for idx in range(1, len(self.conv_inputs)):
-            hcat = torch.cat((hcat, self.conv_inputs[idx](ins[idx])), 1)
+            hcat = torch.cat((hcat, self.conv_inputs[idx](ins[idx])), dim=1)
         logits = self.out(hcat)
         return logits
 
@@ -395,3 +413,26 @@ class ConvToLinearModel(nn.Module):
         h = self.fc(fc_in)
 
         return h
+
+
+class ConvFusionPred(nn.Module):
+
+    # Concatenates the outputs of conv model (RGB+D) and fusion model (L+V) for a fully connected layer between
+    # all model outputs and classes.
+    def __init__(self, dv, conv_inputs, conv_outputs_size, fusion_input, fusion_output_size, num_classes):
+        super(ConvFusionPred, self).__init__()
+        self.conv_inputs = conv_inputs
+        self.fusion_input = fusion_input
+        self.out = torch.nn.Linear(conv_outputs_size + fusion_output_size, num_classes).to(dv)
+        self.param_list = list(self.out.parameters())
+        for m in self.conv_inputs:
+            self.param_list.extend(list(m.parameters()))
+
+    def forward(self, ins):  # ins: [conv_input0, conv_input1, ..., conv_inputN, fusion_input1, fusion_input2, ...]
+        hcat = self.conv_inputs[0](ins[0])
+        for idx in range(1, len(self.conv_inputs)):
+            hcat = torch.cat((hcat, self.conv_inputs[idx](ins[idx])), dim=1)
+        fusion_out = self.fusion_input(ins[len(self.conv_inputs):])
+        hcat = torch.cat((hcat, fusion_out), dim=1)  # concatenate along feature, not batch, dim
+        logits = self.out(hcat)
+        return logits

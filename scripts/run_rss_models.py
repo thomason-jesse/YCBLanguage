@@ -25,6 +25,7 @@ def main(args, dv):
 
     # Near universals it would be better to read from data but which we're hard-coding.
     preps = ["in", "on"]
+    num_trials = 5  # fixed back in prep_torch_data
     modality_hidden_dim = 300  # fixed dimension to reduce RGBD, language, and vision representations to.
     batch_size = 8  # TODO: hyperparam to set sensibly
 
@@ -178,7 +179,6 @@ def main(args, dv):
                 np.random.shuffle(idxs)
                 tr_inputs = [tr_inputs[idx] for idx in idxs]
                 tro = tr_outputs[p][idxs, :]
-                num_trials = tr_inputs_rgb[p][0].shape[0]  # examples per input
                 result = None
                 last_saved_fn = None
                 for epoch in range(ff_epochs):
@@ -188,14 +188,14 @@ def main(args, dv):
                     batches_run = 0
                     while tidx < len(tr_inputs):
                         model.zero_grad()
-                        batch_in = [torch.zeros((batch_size * num_trials, tr_inputs_rgb[p][0].shape[1],
-                                                 tr_inputs_rgb[p][0].shape[2], tr_inputs_rgb[p][0].shape[3])).to(dv),
-                                    torch.zeros((batch_size * num_trials, tr_inputs_d[p][0].shape[1],
-                                                 tr_inputs_d[p][0].shape[2], tr_inputs_d[p][0].shape[3])).to(dv)]
+                        batch_in = [torch.zeros((batch_size * num_trials, tr_inputs[0][0].shape[1],
+                                                 tr_inputs[0][0].shape[2], tr_inputs[0][0].shape[3])).to(dv),
+                                    torch.zeros((batch_size * num_trials, tr_inputs[0][1].shape[1],
+                                                 tr_inputs[0][1].shape[2], tr_inputs[0][1].shape[3])).to(dv)]
                         batch_gold = torch.zeros(batch_size * num_trials).to(dv)
                         for bidx in range(batch_size):
-                            batch_in[0][bidx:bidx+num_trials, :, :, :] = tr_inputs_rgb[p][tidx]
-                            batch_in[1][bidx:bidx+num_trials, :] = tr_inputs_d[p][tidx]
+                            batch_in[0][bidx:bidx+num_trials, :, :, :] = tr_inputs[tidx][0]
+                            batch_in[1][bidx:bidx+num_trials, :] = tr_inputs[tidx][1]
                             batch_gold[bidx:bidx+num_trials] = np.repeat(tro[tidx][0], num_trials)
 
                             tidx += 1
@@ -344,6 +344,161 @@ def main(args, dv):
                                                   None, modality_hidden_dim, len(classes), num_modalities=2,
                                                   epochs=ff_epochs, dropout=ff_dropout, learning_rate=ff_lr, opt=ff_opt,
                                                   verbose=args.verbose, batch_size=batch_size))
+        print("... done")
+
+    if 'rgbd' in models and 'glove' in models and 'resnet' in models:
+        print("Running RGBD+GloVe+ResNet models")
+        bs.append("RGBD+GloVe+ResNet")
+        rs.append({})
+        for p in preps:
+            if tr_inputs_rgb[p] is None:
+                print("... ERROR: data had no RGBD features for prep %s" % p)
+                del bs[-1]
+                del rs[-1]
+                continue
+
+            # Couple the RGB, D, L, V inputs to feed into the conv and FF networks.
+            tr_inputs = [[tr_inputs_rgb[p][idx], tr_inputs_d[p][idx], tr_inputs_l[p][idx], tr_inputs_v[p][idx]]
+                         for idx in range(len(tr_outputs[p]))]
+            te_inputs = [[te_inputs_rgb[p][idx], te_inputs_d[p][idx], te_inputs_l[p][idx], te_inputs_v[p][idx]]
+                         for idx in range(len(te_outputs[p]))]
+
+            # Instantiate convolutional RGB and Depth models, then tie them together with a conv FF model.
+            rgb_conv_model = ConvToLinearModel(dv, 3, modality_hidden_dim).to(dv)
+            depth_conv_model = ConvToLinearModel(dv, 1, modality_hidden_dim).to(dv)
+            l_v_widths = [len(tr_inputs[0][2]), len(tr_inputs[0][3])]
+            fusion_model = EarlyFusionFFModel(dv, l_v_widths, modality_hidden_dim, ff_dropout).to(dv)
+            # TODO: could shear this up so RGBD and L+V get equal size representations (right now RGBD is twice the size)
+            model = ConvFusionPred(dv, [rgb_conv_model, depth_conv_model], modality_hidden_dim * 2,
+                                   fusion_model, modality_hidden_dim, len(classes)).to(dv)
+
+            # Instantiate loss and optimizer.
+            # TODO: optimizer is a hyperparam to set.
+            loss_function = nn.CrossEntropyLoss()
+            if ff_opt == 'sgd':
+                optimizer = optim.SGD(model.param_list, lr=ff_lr)
+            elif ff_opt == 'adagrad':
+                optimizer = optim.Adagrad(model.param_list, lr=ff_lr)
+            elif ff_opt == 'adam':
+                optimizer = optim.Adam(model.param_list, lr=ff_lr)
+            elif ff_opt == 'rmsprop':
+                optimizer = optim.RMSprop(model.param_list, lr=ff_lr)
+            else:
+                raise ValueError('Unrecognized opt specification "' + ff_opt + '".')
+
+            # Train model.
+            if ff_random_restarts is None:
+                seeds = [None]
+            else:
+                seeds = ff_random_restarts
+                rs[-1][p] = []
+            for seed in tqdm(seeds):
+                if seed is not None:
+                    # print("... %s with seed %d ..." % (p, seed))
+                    np.random.seed(seed)
+                    torch.manual_seed(seed)
+
+                # Run training for specified number of epochs.
+                best_acc = best_cm = tr_acc_at_best = trcm_at_best = tloss_at_best = t_epochs = None
+                idxs = list(range(len(tr_inputs)))
+                np.random.shuffle(idxs)
+                tr_inputs = [tr_inputs[idx] for idx in idxs]
+                tro = tr_outputs[p][idxs, :]
+                result = None
+                last_saved_fn = None
+                for epoch in range(ff_epochs):
+                    tloss = 0
+                    trcm = np.zeros(shape=(len(classes), len(classes)))
+                    tidx = 0
+                    batches_run = 0
+                    while tidx < len(tr_inputs):
+                        model.zero_grad()
+                        batch_in = [torch.zeros((batch_size * num_trials, tr_inputs[0][0].shape[1],
+                                                 tr_inputs[0][0].shape[2], tr_inputs[0][0].shape[3])).to(dv),
+                                    torch.zeros((batch_size * num_trials, tr_inputs[0][1].shape[1],
+                                                 tr_inputs[0][1].shape[2], tr_inputs[0][1].shape[3])).to(dv),
+                                    torch.zeros((batch_size * num_trials, tr_inputs[0][2].shape[0])).to(dv),
+                                    torch.zeros((batch_size * num_trials, tr_inputs[0][3].shape[0])).to(dv)]
+                        batch_gold = torch.zeros(batch_size * num_trials).to(dv)
+                        for bidx in range(batch_size):
+                            batch_in[0][bidx:bidx+num_trials, :, :, :] = tr_inputs[tidx][0]
+                            batch_in[1][bidx:bidx+num_trials, :] = tr_inputs[tidx][1]
+                            # use the same L, V vector across all trials for this pair
+                            batch_in[2][bidx:bidx+num_trials, :] = tr_inputs[tidx][2].repeat(num_trials, 1)
+                            batch_in[3][bidx:bidx+num_trials, :] = tr_inputs[tidx][3].repeat(num_trials, 1)
+                            batch_gold[bidx:bidx+num_trials] = np.repeat(tro[tidx][0], num_trials)
+
+                            tidx += 1
+                            if tidx == len(tr_inputs):
+                                break
+
+                        logits = model(batch_in)
+                        loss = loss_function(logits, batch_gold.long())
+                        tloss += loss.data.item()
+                        batches_run += 1
+
+                        loss.backward()
+                        optimizer.step()
+
+                        # Calculated per instance, not per pair (e.g., x5 examples, individual voting).
+                        for jdx in range(logits.shape[0]):
+                            trcm[int(batch_gold[jdx])][int(logits[jdx].argmax(0))] += 1
+
+                    tloss /= batches_run
+                    tr_acc = get_acc(trcm)
+
+                    with torch.no_grad():
+                        cm = np.zeros(shape=(len(classes), len(classes)))
+                        for jdx in range(len(te_inputs)):
+
+                            te_in = [torch.tensor(te_inputs[jdx][0]).to(dv),
+                                        torch.tensor(te_inputs[jdx][1]).to(dv),
+                                        torch.tensor(te_inputs[jdx][2].repeat(num_trials, 1)).to(dv),
+                                        torch.tensor(te_inputs[jdx][3].repeat(num_trials, 1)).to(dv)]
+                            trials_logits = model(te_in)  # will be full batch size wide
+                            v = np.zeros(len(classes))
+                            for tdx in range(num_trials):  # take a vote over trials (not whole logit size)
+                                v[int(trials_logits[tdx].argmax(0))] += 1
+                            
+                            if args.rgbd_m_as_disagreement:
+                                if v[1] == v[2] == 0:  # all votes are for class negative
+                                    cm[int(te_outputs[p][jdx])][0] += 1
+                                elif v[0] == v[1] == 0:  # all votes are for class positive
+                                    cm[int(te_outputs[p][jdx])][2] += 1
+                                else:  # votes are split among different classes, so conservatively vote maybe
+                                    cm[int(te_outputs[p][jdx])][1] += 1
+                            else:
+                                # If N/M/Y are all available, just use the majority vote across the trials
+                                # to decide the predicted label of the pair.
+                                cm[int(te_outputs[p][jdx])][int(v.argmax(0))] += 1
+
+                        acc = get_acc(cm)
+                        if best_acc is None or acc > best_acc:
+                            best_acc = acc
+                            best_cm = cm
+                            tr_acc_at_best = tr_acc
+                            trcm_at_best = trcm
+                            tloss_at_best = tloss
+                            t_epochs = epoch + 1  # record how many epochs of training have happened at this time
+
+                            # Save best-performing model at this seed
+                            if seed is not None:
+                                fn = os.path.join(args.outdir, "p-%s_m-rgbd+glove+resnet_tr-%s_te-%s_s-%s_acc-%.3f.pt" %
+                                    (p, args.train_objective, args.test_objective, seed, best_acc))
+                            else:
+                                fn = os.path.join(args.outdir, "p-%s_m-rgbd+glove+resnet_tr-%s_te-%s_acc-%.3f.pt" %
+                                    (p, args.train_objective, args.test_objective, best_acc))
+                            torch.save(model.state_dict(), fn)
+                            if last_saved_fn is not None:  # remove previous save
+                                os.system("rm %s" % last_saved_fn)
+                            last_saved_fn = fn
+
+                    result = best_acc, best_cm, tr_acc_at_best, trcm_at_best, tloss_at_best, t_epochs
+
+                if seed is None:
+                    rs[-1][p] = result
+                else:
+                    rs[-1][p].append(result)
         print("... done")
 
     if ff_random_restarts is None:
