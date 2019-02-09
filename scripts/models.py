@@ -98,7 +98,7 @@ def run_ff_model(dv, outdir, model_desc,
                  inwidth, hidden_dim, outwidth,  # single hidden layer of specified size, projecting to outwidth classes
                  num_modalities,  # If greater than 1, uses EarlyFusionModel to implement, else simple single hidden layer.
                  batch_size=None, epochs=None,
-                 dropout=0, learning_rate=0.001, opt='sgd',
+                 dropout=0, learning_rate=0.001, opt='sgd', activation='relu',
                  verbose=False):
     assert batch_size is not None or epochs is not None
 
@@ -116,17 +116,15 @@ def run_ff_model(dv, outdir, model_desc,
     if verbose:
         print("FF: constructing model...")
     if num_modalities == 1:
-        # TODO: these dropout layers might be in a stupid place.
-        lr = [nn.Linear(inwidth, hidden_dim), torch.nn.ReLU(), torch.nn.Dropout(dropout), 
-              nn.Linear(hidden_dim, outwidth)]
+        shrink_model = ShrinkingFFModel(dv, inwidth, hidden_dim, hidden_dim, dropout, activation).to(dv)
         fusion_model = None
-        model = nn.Sequential(*lr).to(dv)
-        mparams = model.parameters()
+        model = PredModel(dv, shrink_model, hidden_dim, outwidth).to(dv)
+    elif num_modalities == 2:
+        fusion_model = ShrinkingFusionFFModel(dv, len(tr_inputs[0][0]), len(tr_inputs[1][0]),
+                                              hidden_dim, dropout, activation).to(dv)
+        model = PredModel(dv, fusion_model, hidden_dim, outwidth).to(dv)
     else:
-        widths = [len(tr_inputs[midx][0]) for midx in range(num_modalities)]
-        fusion_model = EarlyFusionFFModel(dv, widths, hidden_dim, dropout).to(dv)
-        model = FusionPredModel(dv, fusion_model, hidden_dim, outwidth).to(dv)
-        mparams = model.param_list
+        sys.exit("ERROR: unsupported number of modalities for run_ff_model %d" % num_modalities)
     if verbose:
         print("FF: ... done")
 
@@ -137,19 +135,20 @@ def run_ff_model(dv, outdir, model_desc,
     loss_function = nn.CrossEntropyLoss()
 
     if opt == 'sgd':
-        optimizer = optim.SGD(mparams, lr=learning_rate)
+        optimizer = optim.SGD(model.parameters(), lr=learning_rate)
     elif opt == 'adagrad':
-        optimizer = optim.Adagrad(mparams, lr=learning_rate)
+        optimizer = optim.Adagrad(model.parameters(), lr=learning_rate)
     elif opt == 'adam':
-        optimizer = optim.Adam(mparams, lr=learning_rate)
+        optimizer = optim.Adam(model.parameters(), lr=learning_rate)
     elif opt == 'rmsprop':
-        optimizer = optim.RMSprop(mparams, lr=learning_rate)
+        optimizer = optim.RMSprop(model.parameters(), lr=learning_rate)
     else:
         raise ValueError('Unrecognized opt specification "' + opt + '".')
 
     best_acc = best_cm = tr_acc_at_best = trcm_at_best = tloss_at_best = t_epochs = None
     if num_modalities == 1:
         idxs = list(range(len(tr_inputs)))
+        # TODO: closely vet training procedure wrt randomization of input order.
         np.random.shuffle(idxs)
         tr_inputs = [tr_inputs[idx] for idx in idxs]
         num_tr = len(tr_inputs)
@@ -254,124 +253,117 @@ def run_ff_model(dv, outdir, model_desc,
     return best_acc, best_cm, tr_acc_at_best, trcm_at_best, tloss_at_best, t_epochs
 
 
-class FusionPredModel(nn.Module):
+# Predicts output layer from two model outputs.
+# Assumes two fusion models output same size representations.
+# Concatenates outputs and learns fc layer to output classes.
+class MultiPredModel(nn.Module):
 
-    def __init__(self, dv, fusion_input, fusion_output_size, num_classes):
-        super(FusionPredModel, self).__init__()
-        self.fusion_input = fusion_input
-        self.out = torch.nn.Linear(fusion_output_size, num_classes).to(dv)
-        self.param_list = list(self.out.parameters())
-        self.param_list.extend(list(fusion_input.parameters()))
+    def __init__(self, dv, model_1, model_2, model_output_size, output_size):
+        super(MultiPredModel, self).__init__()
+        self.model_1 = model_1
+        self.model_2 = model_2
+        self.out = torch.nn.Linear(model_output_size * 2, output_size).to(dv)
 
     def forward(self, ins):
-        h = self.fusion_input(ins)
-        logits = self.out(h)
+        h1 = self.model_1(ins[0])
+        h2 = self.model_2(ins[1])
+        # TODO: could try dot product here.
+        # TODO: could try fully connected layer here.
+        logits = self.out(torch.cat((h1, h2), dim=1))  # concatenate along feature, not batch, dim
         return logits
 
 
-# Based on:
-# https://pytorch.org/tutorials/beginner/nlp/sequence_models_tutorial.html
-class EarlyFusionFFModel(nn.Module):
+# Predicts output layer from single model output.
+class PredModel(nn.Module):
 
-    # adds FC shrinking layers on all but smallest modality to shrink them to smallest before fusion
-    # modality_widths - list of input widths, e.g., [300, 1000] means first input width 300, second 1000
-    # hidden_layer_width - hidden layer width after fusion before prediction
-    # dropout - the dropout rate to add before hidden layer connections
-    # num_classes - the number of classes to predict over in the output layer.
-    def __init__(self, dv, modality_widths, hidden_layer_width, dropout):
-        super(EarlyFusionFFModel, self).__init__()
-        self.param_list = []
-        self.num_modalities = len(modality_widths)
+    def __init__(self, dv, model, model_output_size, output_size):
+        super(PredModel, self).__init__()
+        self.model = model
+        self.out = torch.nn.Linear(model_output_size, output_size).to(dv)
 
-        # Add shrinking layers to bring larger modality inputs to hidden layer width.
-        # TODO: relu on shrinking layer or just linear?
-        self.shrink_layers = {sidx: nn.Linear(modality_widths[sidx], hidden_layer_width).to(dv)
-                              for sidx in range(len(modality_widths)) if modality_widths[sidx] > hidden_layer_width}
-        input_cat_width = hidden_layer_width * len(modality_widths)
+    def forward(self, ins):
+        h = self.model(ins)
+        return self.out(h)
 
-        for sidx in self.shrink_layers:
-            self.param_list.extend(list(self.shrink_layers[sidx].parameters()))
 
-        # In forward pass, inputs are then concatenated and fed to a number (possibly zero) of hidden layers.
-        self.hidden_layers = [nn.Linear(input_cat_width, hidden_layer_width).to(dv),
-                              torch.nn.ReLU().to(dv), torch.nn.Dropout(dropout).to(dv)]
-        for hl in self.hidden_layers:
-            self.param_list.extend(list(hl.parameters()))
+# Single linear layer shrinks the input to the target size then computes a hidden layer.
+class ShrinkingFFModel(nn.Module):
 
-    # inputs - a list of tensor inputs
+    def __init__(self, dv, input_width, shrink_width, output_width, dropout, activation):
+        super(ShrinkingFFModel, self).__init__()
+        # TODO: activation on shrinking layer or leave linear? Dropout?
+        self.shrink_layer = nn.Linear(input_width, shrink_width).to(dv)
+        if activation == 'relu':
+            self.activation = torch.nn.ReLU().to(dv)
+        elif activation == 'tanh':
+            self.activation = torch.nn.Tanh().to(dv)
+        else:
+            sys.exit("unrecognized activation '%s'" % activation)
+        self.dropout = torch.nn.Dropout(dropout).to(dv)
+        self.hidden_layer = nn.Linear(shrink_width, output_width).to(dv)
+
+    def forward(self, inputs):
+        h = self.shrink_layer(inputs)
+        h = self.activation(h)
+        # TODO: this dropout layer might be in a stupid place.
+        h = self.dropout(h)
+        h = self.hidden_layer(h)
+        return h
+
+
+# Takes in two input modalities, shrinks them to the same target size w a linear layer, and dots them.
+class ShrinkingFusionFFModel(nn.Module):
+
+    # in1_width - first modality input width
+    # in2_width - second modality input width
+    # out_width - output width to shrink modalities to (will be dotted together)
+    def __init__(self, dv, in1_width, in2_width, out_width, dropout, activation):
+        super(ShrinkingFusionFFModel, self).__init__()
+        self.shrinking_1 = ShrinkingFFModel(dv, in1_width, out_width, out_width, dropout, activation)
+        self.shrinking_2 = ShrinkingFFModel(dv, in2_width, out_width, out_width, dropout, activation)
+
+    # inputs - a list of tensor inputs.
+    # outputs - dot product of shrunken, equal sized input modality representations.
     def forward(self, inputs):
 
         # Shrink inputs.
-        s_inputs = [self.shrink_layers[sidx](inputs[sidx]) if sidx in self.shrink_layers else inputs[sidx]
-                    for sidx in range(self.num_modalities)]
-
-        # Concatenate inputs.
-        # cat_inputs = torch.cat(s_inputs, dim=1)  # concatenate along the feature dimension (batch is dim 0)
-
-        # Feed concatenation through hidden layers and predict classes.
-        # ff_inputs = [cat_inputs]
-        # for hl in self.hidden_layers:
-        #     ff_inputs.append(hl(ff_inputs[-1]))
-        # logits = ff_inputs[-1]
-
-        # Hidden layer as a simple dot between modalities demonstrably improves performance on Dev.
-        # logits = self.hidden_layers[-1](s_inputs[0] * s_inputs[1])
-
-        # Hidden layer as a simple dot between modalities demonstrably improves performance on Dev.
-        h = s_inputs[0] * s_inputs[1]
+        shrunk_1 = self.shrinking_1(inputs[0])
+        shrunk_2 = self.shrinking_2(inputs[1])
+        h = shrunk_1 * shrunk_2
 
         return h
 
-# DEBUG - stats before hidden dot (Glove+ResNet)
-# Results:
-#  Majority Class:
-#   in:   acc 0.660+/-0.000       (train: 0.610+/-0.000)
-#         f1  0.737+/-0.000       (train: 0.678+/-0.000)
-#   on:   acc 0.460+/-0.000       (train: 0.386+/-0.000)
-#         f1  0.533+/-0.000       (train: 0.474+/-0.000)
-#  GloVe+ResNet FF:
-#   in:   acc 0.661+/-0.003       (train: 0.582+/-0.038)
-#         f1  0.739+/-0.003       (train: 0.649+/-0.040)
-#   on:   acc 0.527+/-0.024       (train: 0.556+/-0.084)
-#         f1  0.568+/-0.029       (train: 0.580+/-0.098)
 
-# 300 dim hidden (using)
-# GloVe+ResNet FF:
-#   in:   acc 0.682+/-0.015       (train: 0.732+/-0.079)
-#         f1  0.746+/-0.017       (train: 0.807+/-0.079)
-#   on:   acc 0.541+/-0.012       (train: 0.711+/-0.059)
-#         f1  0.594+/-0.016       (train: 0.750+/-0.055)
+# Takes in two input modalities, shrinks them to the same target size with convolution layers, and dots them.
+class ConvFusionFFModel(nn.Module):
 
-# 100 dim hidden (shrink both L and V to h, then dot to get combined h)
-# GloVe+ResNet FF:
-#   in:   acc 0.676+/-0.022       (train: 0.628+/-0.099)
-#         f1  0.748+/-0.027       (train: 0.702+/-0.102)
-#   on:   acc 0.536+/-0.022       (train: 0.609+/-0.051)
-#         f1  0.604+/-0.026       (train: 0.647+/-0.065)
+    # adds FC shrinking layers on all but smallest modality to shrink them to smallest before fusion
+    # in1_channels - first modality input channels
+    # in2_channels - second modality input channels
+    # out_width - output width to shrink modalities to (will be dotted together)
+    def __init__(self, dv, in1_channels, in2_channels, out_width, activation):
+        super(ConvFusionFFModel, self).__init__()
+        self.shrinking_1 = ConvToLinearModel(dv, in1_channels, out_width, activation)
+        self.shrinking_2 = ConvToLinearModel(dv, in2_channels, out_width, activation)
+
+    # inputs - a list of tensor inputs.
+    # outputs - dot product of shrunken, equal sized input modality representations.
+    def forward(self, inputs):
+
+        # Shrink inputs.
+        shrunk_1 = self.shrinking_1(inputs[0])
+        shrunk_2 = self.shrinking_2(inputs[1])
+        h = shrunk_1 * shrunk_2
+
+        return h
 
 
-
-class ConvFFModel(nn.Module):
-
-    def __init__(self, dv, conv_inputs, conv_outputs_size, num_classes):
-        super(ConvFFModel, self).__init__()
-        self.conv_inputs = conv_inputs
-        self.out = torch.nn.Linear(conv_outputs_size, num_classes).to(dv)
-        self.param_list = list(self.out.parameters())
-        for m in self.conv_inputs:
-            self.param_list.extend(list(m.parameters()))
-
-    def forward(self, ins):
-        hcat = self.conv_inputs[0](ins[0])
-        for idx in range(1, len(self.conv_inputs)):
-            hcat = torch.cat((hcat, self.conv_inputs[idx](ins[idx])), dim=1)
-        logits = self.out(hcat)
-        return logits
-
-
+# Serires of 3 convolutions + max pools followed by a fully connected layer to shrink
+# a multi-channel, 2d input into a single linear representation.
+# TODO: try dropout
 class ConvToLinearModel(nn.Module):
 
-    def __init__(self, dv, channels, hidden_dim):
+    def __init__(self, dv, channels, hidden_dim, activation):
         super(ConvToLinearModel, self).__init__()
         out_channels_factor = 2
         kernel = (3, 3)
@@ -380,17 +372,32 @@ class ConvToLinearModel(nn.Module):
                                     channels * out_channels_factor,
                                     kernel, stride=1).to(dv)
         self.mp1 = torch.nn.MaxPool2d(kernel, stride=stride).to(dv)
-        self.relu1 = torch.nn.ReLU().to(dv)
+        if activation == 'relu':
+            self.act1 = torch.nn.ReLU().to(dv)
+        elif activation == 'tanh':
+            self.act1 = torch.nn.Tanh().to(dv)
+        else:
+            sys.exit("unrecognized activation '%s'" % activation)
         self.enc2 = torch.nn.Conv2d(channels * out_channels_factor,
                                     channels * out_channels_factor * out_channels_factor,
                                     kernel).to(dv)
         self.mp2 = torch.nn.MaxPool2d(kernel, stride=stride).to(dv)
-        self.relu2 = torch.nn.ReLU().to(dv)
+        if activation == 'relu':
+            self.act2 = torch.nn.ReLU().to(dv)
+        elif activation == 'tanh':
+            self.act2 = torch.nn.Tanh().to(dv)
+        else:
+            sys.exit("unrecognized activation '%s'" % activation)
         self.enc3 = torch.nn.Conv2d(channels * out_channels_factor * out_channels_factor,
                                     channels * out_channels_factor * out_channels_factor * out_channels_factor,
                                     kernel).to(dv)
         self.mp3 = torch.nn.MaxPool2d(kernel, stride=stride, padding=1).to(dv)
-        self.relu3 = torch.nn.ReLU().to(dv)
+        if activation == 'relu':
+            self.act3 = torch.nn.ReLU().to(dv)
+        elif activation == 'tanh':
+            self.act3 = torch.nn.Tanh().to(dv)
+        else:
+            sys.exit("unrecognized activation '%s'" % activation)
         self.conv_out_dim = [1, 2]  # Output dimensions from final max pool.
         self.final_output_channels = channels * out_channels_factor * out_channels_factor * out_channels_factor
         self.fc = torch.nn.Linear(self.conv_out_dim[0] * self.conv_out_dim[1] *
@@ -404,16 +411,16 @@ class ConvToLinearModel(nn.Module):
         # print("enc1\t" + str(eim.shape))  # DEBUG
         eim = self.mp1(eim)
         # print("mp1\t" + str(eim.shape))  # DEBUG
-        eim = self.relu1(eim)
+        eim = self.act1(eim)
         eim = self.enc2(eim)
         # print("enc2\t" + str(eim.shape))  # DEBUG
         eim = self.mp2(eim)
         # print("mp2\t" + str(eim.shape))  # DEBUG
-        eim = self.relu2(eim)
+        eim = self.act2(eim)
         eim = self.enc3(eim)
         # print("enc3\t" + str(eim.shape))  # DEBUG
         eim = self.mp3(eim)
-        eim = self.relu3(eim)
+        eim = self.act3(eim)
         # print("mp3\t" + str(eim.shape))  # DEBUG
         # TODO: is this im.shape[0] necessary? is that... the batch? seems wonky.
         fc_in = eim.view((im.shape[0], self.final_output_channels * self.conv_out_dim[0] * self.conv_out_dim[1]))
@@ -421,26 +428,3 @@ class ConvToLinearModel(nn.Module):
         h = self.fc(fc_in)
 
         return h
-
-
-class ConvFusionPred(nn.Module):
-
-    # Concatenates the outputs of conv model (RGB+D) and fusion model (L+V) for a fully connected layer between
-    # all model outputs and classes.
-    def __init__(self, dv, conv_inputs, conv_outputs_size, fusion_input, fusion_output_size, num_classes):
-        super(ConvFusionPred, self).__init__()
-        self.conv_inputs = conv_inputs
-        self.fusion_input = fusion_input
-        self.out = torch.nn.Linear(conv_outputs_size + fusion_output_size, num_classes).to(dv)
-        self.param_list = list(self.out.parameters())
-        for m in self.conv_inputs:
-            self.param_list.extend(list(m.parameters()))
-
-    def forward(self, ins):  # ins: [conv_input0, conv_input1, ..., conv_inputN, fusion_input1, fusion_input2, ...]
-        hcat = self.conv_inputs[0](ins[0])
-        for idx in range(1, len(self.conv_inputs)):
-            hcat = torch.cat((hcat, self.conv_inputs[idx](ins[idx])), dim=1)
-        fusion_out = self.fusion_input(ins[len(self.conv_inputs):])
-        hcat = torch.cat((hcat, fusion_out), dim=1)  # concatenate along feature, not batch, dim
-        logits = self.out(hcat)
-        return logits

@@ -26,8 +26,26 @@ def main(args, dv):
     # Near universals it would be better to read from data but which we're hard-coding.
     preps = ["in", "on"]
     num_trials = 5  # fixed back in prep_torch_data
-    modality_hidden_dim = 300  # fixed dimension to reduce RGBD, language, and vision representations to.
+
+    # Set hyperparameters, some of which are on a per-preposition basis.
     batch_size = 8  # TODO: hyperparam to set sensibly
+    num_epochs = 10
+    hyperparam = {p: {} for p in preps}
+    # fixed dimension to reduce RGBD, language, and vision representations to.
+    hyperparam["in"]["hidden_dim"] = 50
+    hyperparam["on"]["hidden_dim"] = 50
+    # Dropout
+    hyperparam["in"]["dropout"] = 0.1
+    hyperparam["on"]["dropout"] = 0.1
+    # Learning rate
+    hyperparam["in"]["learning_rate"] = 0.0001
+    hyperparam["on"]["learning_rate"] = 0.0001
+    # Optimizer
+    hyperparam["in"]["opt"] = 'sgd'
+    hyperparam["on"]["opt"] = 'sgd'
+    # Activation
+    hyperparam["in"]["activation"] = 'relu'
+    hyperparam["on"]["activation"] = 'tanh'
 
 
     # labels to use.
@@ -97,8 +115,8 @@ def main(args, dv):
     print("... classes: " + str(classes))
     bs = []
     rs = []
-    ff_random_restarts = None if args.ff_random_restarts is None else \
-        [int(s) for s in args.ff_random_restarts.split(',')]
+    random_restarts = None if args.random_restarts is None else \
+        [int(s) for s in args.random_restarts.split(',')]
 
     # Majority class baseline.
     if 'mc' in models:
@@ -109,23 +127,9 @@ def main(args, dv):
             rs[-1][p] = run_majority_class([int(c[0]) for c in tr_outputs[p].detach().data.cpu().numpy().tolist()],
                                            [int(c[0]) for c in te_outputs[p].detach().data.cpu().numpy().tolist()],
                                            len(classes))
-            if ff_random_restarts is not None:
-                rs[-1][p] = [rs[-1][p] for _ in range(len(ff_random_restarts))]
+            if random_restarts is not None:
+                rs[-1][p] = [rs[-1][p] for _ in range(len(random_restarts))]
         print("... done")
-
-    # Read in hyperparameters for feed forward networks or set defaults.
-    ff_epochs = 10 if args.ff_epochs is None else args.ff_epochs
-    if args.hyperparam_infile is not None:
-        with open(args.hyperparam_infile, 'r') as f:
-            d = json.load(f)
-            ff_dropout = d['dropout']
-            ff_lr = d['lr']
-            ff_opt = d['opt']
-            print("Loaded ff hyperparams: " + str(d))
-    else:
-        ff_dropout = 0
-        ff_lr = 0.001
-        ff_opt = 'sgd'
 
     if 'rgbd' in models:
         print("Running RGBD models")
@@ -139,14 +143,15 @@ def main(args, dv):
                 continue
 
             # Couple the RGB and D inputs to feed into the paired inputs of the conv network.
+            # TODO: closely vet training procedure wrt randomization of input order.
             tr_inputs = [[tr_inputs_rgb[p][idx], tr_inputs_d[p][idx]] for idx in range(len(tr_outputs[p]))]
             te_inputs = [[te_inputs_rgb[p][idx], te_inputs_d[p][idx]] for idx in range(len(te_outputs[p]))]
 
             # Train model.
-            if ff_random_restarts is None:
+            if random_restarts is None:
                 seeds = [None]
             else:
-                seeds = ff_random_restarts
+                seeds = random_restarts
                 rs[-1][p] = []
             for seed in tqdm(seeds):
                 if seed is not None:
@@ -154,24 +159,23 @@ def main(args, dv):
                     np.random.seed(seed)
                     torch.manual_seed(seed)
 
-                # Instantiate convolutional RGB and Depth models, then tie them together with a conv FF model.
-                rgb_conv_model = ConvToLinearModel(dv, 3, modality_hidden_dim).to(dv)
-                depth_conv_model = ConvToLinearModel(dv, 1, modality_hidden_dim).to(dv)
-                model = ConvFFModel(dv, [rgb_conv_model, depth_conv_model], modality_hidden_dim * 2, len(classes)).to(dv)
+                # Instantiate fusion model for RGB and D inputs, then run them through a prediction model to get logits.
+                rgbd_fusion_model = ConvFusionFFModel(dv, 3, 1, hyperparam[p]["hidden_dim"], hyperparam[p]["activation"]).to(dv)
+                model = PredModel(dv, rgbd_fusion_model, hyperparam[p]["hidden_dim"], len(classes)).to(dv)
 
                 # Instantiate loss and optimizer.
                 # TODO: optimizer is a hyperparam to set.
                 loss_function = nn.CrossEntropyLoss()
-                if ff_opt == 'sgd':
-                    optimizer = optim.SGD(model.param_list, lr=ff_lr)
-                elif ff_opt == 'adagrad':
-                    optimizer = optim.Adagrad(model.param_list, lr=ff_lr)
-                elif ff_opt == 'adam':
-                    optimizer = optim.Adam(model.param_list, lr=ff_lr)
-                elif ff_opt == 'rmsprop':
-                    optimizer = optim.RMSprop(model.param_list, lr=ff_lr)
+                if hyperparam[p]["opt"] == 'sgd':
+                    optimizer = optim.SGD(model.parameters(), lr=hyperparam[p]["learning_rate"])
+                elif hyperparam[p]["opt"] == 'adagrad':
+                    optimizer = optim.Adagrad(model.parameters(), lr=hyperparam[p]["learning_rate"])
+                elif hyperparam[p]["opt"] == 'adam':
+                    optimizer = optim.Adam(model.parameters(), lr=hyperparam[p]["learning_rate"])
+                elif hyperparam[p]["opt"] == 'rmsprop':
+                    optimizer = optim.RMSprop(model.parameters(), lr=hyperparam[p]["learning_rate"])
                 else:
-                    raise ValueError('Unrecognized opt specification "' + ff_opt + '".')
+                    raise ValueError('Unrecognized opt specification "' + hyperparam[p]["opt"] + '".')
 
                 # Run training for specified number of epochs.
                 best_acc = best_cm = tr_acc_at_best = trcm_at_best = tloss_at_best = t_epochs = None
@@ -181,7 +185,7 @@ def main(args, dv):
                 tro = tr_outputs[p][idxs, :]
                 result = None
                 last_saved_fn = None
-                for epoch in range(ff_epochs):
+                for epoch in range(num_epochs):
                     tloss = 0
                     trcm = np.zeros(shape=(len(classes), len(classes)))
                     tidx = 0
@@ -273,24 +277,28 @@ def main(args, dv):
         bs.append("GloVe FF")
         rs.append({})
         for p in preps:
-            if ff_random_restarts is None:
+            if random_restarts is None:
                 model_desc = "p-%s_m-glove_tr-%s_te-%s" % (p, args.train_objective, args.test_objective)
                 rs[-1][p] = run_ff_model(dv, args.outdir, model_desc,
                                          tr_inputs_l[p], tr_outputs[p], te_inputs_l[p], te_outputs[p],
-                                         tr_inputs_l[p].shape[1], modality_hidden_dim, len(classes), num_modalities=1,
-                                         epochs=ff_epochs, dropout=ff_dropout, learning_rate=ff_lr, opt=ff_opt,
+                                         tr_inputs_l[p].shape[1], hyperparam[p]["hidden_dim"], len(classes), num_modalities=1,
+                                         epochs=num_epochs, dropout=hyperparam[p]["dropout"],
+                                         learning_rate=hyperparam[p]["learning_rate"], opt=hyperparam[p]["opt"],
+                                         activation=hyperparam[p]["activation"],
                                          verbose=args.verbose, batch_size=batch_size)
             else:
                 rs[-1][p] = []
-                for seed in tqdm(ff_random_restarts):
+                for seed in tqdm(random_restarts):
                     # print("... with seed " + str(seed) + "...")
                     np.random.seed(seed)
                     torch.manual_seed(seed)
                     model_desc = "p-%s_m-glove_tr-%s_te-%s_s-%s" % (p, args.train_objective, args.test_objective, seed)
                     rs[-1][p].append(run_ff_model(dv, args.outdir, model_desc,
                                                   tr_inputs_l[p], tr_outputs[p], te_inputs_l[p], te_outputs[p],
-                                                  tr_inputs_l[p].shape[1], modality_hidden_dim, len(classes), num_modalities=1,
-                                                  epochs=ff_epochs, dropout=ff_dropout, learning_rate=ff_lr, opt=ff_opt,
+                                                  tr_inputs_l[p].shape[1], hyperparam[p]["hidden_dim"], len(classes), num_modalities=1,
+                                                  epochs=num_epochs, dropout=hyperparam[p]["dropout"],
+                                                  learning_rate=hyperparam[p]["learning_rate"], opt=hyperparam[p]["opt"],
+                                                  activation=hyperparam[p]["activation"],
                                                   verbose=args.verbose, batch_size=batch_size))
         print("... done")
 
@@ -299,24 +307,28 @@ def main(args, dv):
         bs.append("ResNet FF")
         rs.append({})
         for p in preps:
-            if ff_random_restarts is None:
+            if random_restarts is None:
                 model_desc = "p-%s_m-resnet_tr-%s_te-%s" % (p, args.train_objective, args.test_objective)
                 rs[-1][p] = run_ff_model(dv, args.outdir, model_desc,
                                          tr_inputs_v[p], tr_outputs[p], te_inputs_v[p], te_outputs[p],
-                                         tr_inputs_v[p].shape[1], modality_hidden_dim, len(classes), num_modalities=1,
-                                         epochs=ff_epochs, dropout=ff_dropout, learning_rate=ff_lr, opt=ff_opt,
+                                         tr_inputs_v[p].shape[1], hyperparam[p]["hidden_dim"], len(classes), num_modalities=1,
+                                         epochs=num_epochs, dropout=hyperparam[p]["dropout"],
+                                         learning_rate=hyperparam[p]["learning_rate"], opt=hyperparam[p]["opt"],
+                                         activation=hyperparam[p]["activation"],
                                          verbose=args.verbose, batch_size=batch_size)
             else:
                 rs[-1][p] = []
-                for seed in tqdm(ff_random_restarts):
+                for seed in tqdm(random_restarts):
                     # print("... with seed " + str(seed) + "...")
                     np.random.seed(seed)
                     torch.manual_seed(seed)
                     model_desc = "p-%s_m-resnet_tr-%s_te-%s_s-%s" % (p, args.train_objective, args.test_objective, seed)
                     rs[-1][p].append(run_ff_model(dv, args.outdir, model_desc,
                                                   tr_inputs_v[p], tr_outputs[p], te_inputs_v[p], te_outputs[p],
-                                                  tr_inputs_v[p].shape[1], modality_hidden_dim, len(classes), num_modalities=1,
-                                                  epochs=ff_epochs, dropout=ff_dropout, learning_rate=ff_lr, opt=ff_opt,
+                                                  tr_inputs_v[p].shape[1], hyperparam[p]["hidden_dim"], len(classes), num_modalities=1,
+                                                  epochs=num_epochs, dropout=hyperparam[p]["dropout"],
+                                                  learning_rate=hyperparam[p]["learning_rate"], opt=hyperparam[p]["opt"],
+                                                  activation=hyperparam[p]["activation"],
                                                   verbose=args.verbose, batch_size=batch_size))
         print("... done")
 
@@ -325,17 +337,19 @@ def main(args, dv):
         bs.append("GloVe+ResNet FF")
         rs.append({})
         for p in preps:
-            if ff_random_restarts is None:
+            if random_restarts is None:
                 model_desc = "p-%s_m-glove+resnet_tr-%s_te-%s" % (p, args.train_objective, args.test_objective)
                 rs[-1][p] = run_ff_model(dv, args.outdir, model_desc,
                                          [tr_inputs_l[p], tr_inputs_v[p]], tr_outputs[p],
                                          [te_inputs_l[p], te_inputs_v[p]], te_outputs[p],
-                                         None, modality_hidden_dim, len(classes), num_modalities=2,
-                                         epochs=ff_epochs, dropout=ff_dropout, learning_rate=ff_lr, opt=ff_opt,
+                                         None, hyperparam[p]["hidden_dim"], len(classes), num_modalities=2,
+                                         epochs=num_epochs, dropout=hyperparam[p]["dropout"],
+                                         learning_rate=hyperparam[p]["learning_rate"], opt=hyperparam[p]["opt"],
+                                         activation=hyperparam[p]["activation"],
                                          verbose=args.verbose, batch_size=batch_size)
             else:
                 rs[-1][p] = []
-                for seed in tqdm(ff_random_restarts):
+                for seed in tqdm(random_restarts):
                     # print("... with seed " + str(seed) + "...")
                     np.random.seed(seed)
                     torch.manual_seed(seed)
@@ -343,8 +357,10 @@ def main(args, dv):
                     rs[-1][p].append(run_ff_model(dv, args.outdir, model_desc,
                                                   [tr_inputs_l[p], tr_inputs_v[p]], tr_outputs[p],
                                                   [te_inputs_l[p], te_inputs_v[p]], te_outputs[p],
-                                                  None, modality_hidden_dim, len(classes), num_modalities=2,
-                                                  epochs=ff_epochs, dropout=ff_dropout, learning_rate=ff_lr, opt=ff_opt,
+                                                  None, hyperparam[p]["hidden_dim"], len(classes), num_modalities=2,
+                                                  epochs=num_epochs, dropout=hyperparam[p]["dropout"],
+                                                  learning_rate=hyperparam[p]["learning_rate"], opt=hyperparam[p]["opt"],
+                                                  activation=hyperparam[p]["activation"],
                                                   verbose=args.verbose, batch_size=batch_size))
         print("... done")
 
@@ -360,6 +376,7 @@ def main(args, dv):
                 continue
 
             # Couple the RGB, D, L, V inputs to feed into the conv and FF networks.
+            # TODO: closely vet training procedure wrt randomization of input order.
             tr_inputs = [[tr_inputs_rgb[p][idx], tr_inputs_d[p][idx], tr_inputs_l[p][idx], tr_inputs_v[p][idx]]
                          for idx in range(len(tr_outputs[p]))]
             te_inputs = [[te_inputs_rgb[p][idx], te_inputs_d[p][idx], te_inputs_l[p][idx], te_inputs_v[p][idx]]
@@ -367,11 +384,11 @@ def main(args, dv):
 
             # Train model.
             if args.lv_pretrained_fns is not None:
-                print("... loading pretrained model weights for glove+resnet from '" + lv_pretrained_fn + "'...")
-            if ff_random_restarts is None:
+                print("... loading pretrained model weights for glove+resnet from '" + args.lv_pretrained_fns + "'...")
+            if random_restarts is None:
                 seeds = [None]
             else:
-                seeds = ff_random_restarts
+                seeds = random_restarts
                 rs[-1][p] = []
             for seed in tqdm(seeds):
                 if seed is not None:
@@ -379,33 +396,34 @@ def main(args, dv):
                     np.random.seed(seed)
                     torch.manual_seed(seed)
 
-                # Instantiate convolutional RGB and Depth models, then tie them together with a conv FF model.
-                rgb_conv_model = ConvToLinearModel(dv, 3, modality_hidden_dim).to(dv)
-                depth_conv_model = ConvToLinearModel(dv, 1, modality_hidden_dim).to(dv)
-                l_v_widths = [len(tr_inputs[0][2]), len(tr_inputs[0][3])]
-                fusion_model = EarlyFusionFFModel(dv, l_v_widths, modality_hidden_dim, ff_dropout).to(dv)
+                # Instantiate convolutional RGBD fusion model and feed-forward L+V fusion model, then tie them together with a
+                # multi-model prediction model that predicts logits from their outputs.
+                rgbd_fusion_model = ConvFusionFFModel(dv, 3, 1, hyperparam[p]["hidden_dim"], hyperparam[p]["activation"]).to(dv)
+                lv_fusion_model = ShrinkingFusionFFModel(dv, len(tr_inputs[0][2]), len(tr_inputs[0][3]),
+                                                         hyperparam[p]["hidden_dim"], hyperparam[p]["dropout"],
+                                                         hyperparam[p]["activation"]).to(dv)
 
+                # Optionally load pre-trained weights for the L+V model component.
                 if args.lv_pretrained_fns is not None:
                     lv_pretrained_fn = args.lv_pretrained_fns.split(',')[0] if p == 'on' else args.lv_pretrained_fns.split(',')[1]
-                    fusion_model.load_state_dict(torch.load(lv_pretrained_fn))
+                    lv_fusion_model.load_state_dict(torch.load(lv_pretrained_fn))
 
-                # TODO: could shear this up so RGBD and L+V get equal size representations (right now RGBD is twice the size)
-                model = ConvFusionPred(dv, [rgb_conv_model, depth_conv_model], modality_hidden_dim * 2,
-                                       fusion_model, modality_hidden_dim, len(classes)).to(dv)
+                model = MultiPredModel(dv, rgbd_fusion_model, lv_fusion_model,
+                                       hyperparam[p]["hidden_dim"], len(classes)).to(dv)
 
                 # Instantiate loss and optimizer.
                 # TODO: optimizer is a hyperparam to set.
                 loss_function = nn.CrossEntropyLoss()
-                if ff_opt == 'sgd':
-                    optimizer = optim.SGD(model.param_list, lr=ff_lr)
-                elif ff_opt == 'adagrad':
-                    optimizer = optim.Adagrad(model.param_list, lr=ff_lr)
-                elif ff_opt == 'adam':
-                    optimizer = optim.Adam(model.param_list, lr=ff_lr)
-                elif ff_opt == 'rmsprop':
-                    optimizer = optim.RMSprop(model.param_list, lr=ff_lr)
+                if hyperparam[p]["opt"] == 'sgd':
+                    optimizer = optim.SGD(model.parameters(), lr=hyperparam[p]["learning_rate"])
+                elif hyperparam[p]["opt"] == 'adagrad':
+                    optimizer = optim.Adagrad(model.parameters(), lr=hyperparam[p]["learning_rate"])
+                elif hyperparam[p]["opt"] == 'adam':
+                    optimizer = optim.Adam(model.parameters(), lr=hyperparam[p]["learning_rate"])
+                elif hyperparam[p]["opt"] == 'rmsprop':
+                    optimizer = optim.RMSprop(model.parameters(), lr=hyperparam[p]["learning_rate"])
                 else:
-                    raise ValueError('Unrecognized opt specification "' + ff_opt + '".')
+                    raise ValueError('Unrecognized opt specification "' + hyperparam[p]["opt"] + '".')
 
                 # Run training for specified number of epochs.
                 best_acc = best_cm = tr_acc_at_best = trcm_at_best = tloss_at_best = t_epochs = None
@@ -415,7 +433,7 @@ def main(args, dv):
                 tro = tr_outputs[p][idxs, :]
                 result = None
                 last_saved_fn = None
-                for epoch in range(ff_epochs):
+                for epoch in range(num_epochs):
                     tloss = 0
                     trcm = np.zeros(shape=(len(classes), len(classes)))
                     tidx = 0
@@ -423,19 +441,19 @@ def main(args, dv):
                     while tidx < len(tr_inputs):
                         model.train()
                         model.zero_grad()
-                        batch_in = [torch.zeros((batch_size * num_trials, tr_inputs[0][0].shape[1],
+                        batch_in = [[torch.zeros((batch_size * num_trials, tr_inputs[0][0].shape[1],
                                                  tr_inputs[0][0].shape[2], tr_inputs[0][0].shape[3])).to(dv),
-                                    torch.zeros((batch_size * num_trials, tr_inputs[0][1].shape[1],
-                                                 tr_inputs[0][1].shape[2], tr_inputs[0][1].shape[3])).to(dv),
-                                    torch.zeros((batch_size * num_trials, tr_inputs[0][2].shape[0])).to(dv),
-                                    torch.zeros((batch_size * num_trials, tr_inputs[0][3].shape[0])).to(dv)]
+                                     torch.zeros((batch_size * num_trials, tr_inputs[0][1].shape[1],
+                                                  tr_inputs[0][1].shape[2], tr_inputs[0][1].shape[3])).to(dv)],
+                                    [torch.zeros((batch_size * num_trials, tr_inputs[0][2].shape[0])).to(dv),
+                                     torch.zeros((batch_size * num_trials, tr_inputs[0][3].shape[0])).to(dv)]]
                         batch_gold = torch.zeros(batch_size * num_trials).to(dv)
                         for bidx in range(batch_size):
-                            batch_in[0][bidx:bidx+num_trials, :, :, :] = tr_inputs[tidx][0]
-                            batch_in[1][bidx:bidx+num_trials, :] = tr_inputs[tidx][1]
+                            batch_in[0][0][bidx:bidx+num_trials, :, :, :] = tr_inputs[tidx][0]
+                            batch_in[0][1][bidx:bidx+num_trials, :] = tr_inputs[tidx][1]
                             # use the same L, V vector across all trials for this pair
-                            batch_in[2][bidx:bidx+num_trials, :] = tr_inputs[tidx][2].repeat(num_trials, 1)
-                            batch_in[3][bidx:bidx+num_trials, :] = tr_inputs[tidx][3].repeat(num_trials, 1)
+                            batch_in[1][0][bidx:bidx+num_trials, :] = tr_inputs[tidx][2].repeat(num_trials, 1)
+                            batch_in[1][1][bidx:bidx+num_trials, :] = tr_inputs[tidx][3].repeat(num_trials, 1)
                             batch_gold[bidx:bidx+num_trials] = np.repeat(tro[tidx][0], num_trials)
 
                             tidx += 1
@@ -462,10 +480,10 @@ def main(args, dv):
                         cm = np.zeros(shape=(len(classes), len(classes)))
                         for jdx in range(len(te_inputs)):
 
-                            te_in = [torch.tensor(te_inputs[jdx][0]).to(dv),
-                                        torch.tensor(te_inputs[jdx][1]).to(dv),
-                                        torch.tensor(te_inputs[jdx][2].repeat(num_trials, 1)).to(dv),
-                                        torch.tensor(te_inputs[jdx][3].repeat(num_trials, 1)).to(dv)]
+                            te_in = [[torch.tensor(te_inputs[jdx][0]).to(dv),
+                                      torch.tensor(te_inputs[jdx][1]).to(dv)],
+                                     [torch.tensor(te_inputs[jdx][2].repeat(num_trials, 1)).to(dv),
+                                      torch.tensor(te_inputs[jdx][3].repeat(num_trials, 1)).to(dv)]]
                             trials_logits = model(te_in)  # will be full batch size wide
                             v = np.zeros(len(classes))
                             for tdx in range(num_trials):  # take a vote over trials (not whole logit size)
@@ -512,7 +530,7 @@ def main(args, dv):
                     rs[-1][p].append(result)
         print("... done")
 
-    if ff_random_restarts is None:
+    if random_restarts is None:
         # Show results.
         print("Results:")
         for idx in range(len(bs)):
@@ -526,47 +544,29 @@ def main(args, dv):
                 print('\t(TrCM\t' + '\n\t\t'.join(['\t'.join([str(int(ct)) for ct in rs[idx][p][3][i]])
                                                  for i in range(len(rs[idx][p][3]))]) + ")")
 
-        # Write val accuracy results.
-        if args.perf_outfile is not None:
-            print("Writing results to '" + args.perf_outfile + "'...")
-            with open(args.perf_outfile, 'w') as f:
-                json.dump([{p: [rs[idx][p][0], get_f1(rs[idx][p][1])] for p in preps} for idx in range(len(rs))], f)
-            print("... done")
-
     else:
         print("Results:")
         for idx in range(len(bs)):
             print(" " + bs[idx] + ":")
             for p in preps:
-                avg_acc = np.average([rs[idx][p][jdx][0] for jdx in range(len(ff_random_restarts))])
-                std_acc = np.std([rs[idx][p][jdx][0] for jdx in range(len(ff_random_restarts))])
-                avg_tr_acc = np.average([rs[idx][p][jdx][2] for jdx in range(len(ff_random_restarts))])
-                std_tr_acc = np.std([rs[idx][p][jdx][2] for jdx in range(len(ff_random_restarts))])
-                avg_f1 = np.average([get_f1(rs[idx][p][jdx][1]) for jdx in range(len(ff_random_restarts))])
-                std_f1 = np.std([get_f1(rs[idx][p][jdx][1]) for jdx in range(len(ff_random_restarts))])
-                avg_tr_f1 = np.average([get_f1(rs[idx][p][jdx][3]) for jdx in range(len(ff_random_restarts))])
-                std_tr_f1 = np.std([get_f1(rs[idx][p][jdx][3]) for jdx in range(len(ff_random_restarts))])
-                avg_tr_loss = np.average([rs[idx][p][jdx][4] for jdx in range(len(ff_random_restarts))])
-                std_tr_loss = np.std([rs[idx][p][jdx][4] for jdx in range(len(ff_random_restarts))])
-                avg_tr_epoch = np.average([rs[idx][p][jdx][5] for jdx in range(len(ff_random_restarts))])
-                std_tr_epoch = np.std([rs[idx][p][jdx][5] for jdx in range(len(ff_random_restarts))])
+                avg_acc = np.average([rs[idx][p][jdx][0] for jdx in range(len(random_restarts))])
+                std_acc = np.std([rs[idx][p][jdx][0] for jdx in range(len(random_restarts))])
+                avg_tr_acc = np.average([rs[idx][p][jdx][2] for jdx in range(len(random_restarts))])
+                std_tr_acc = np.std([rs[idx][p][jdx][2] for jdx in range(len(random_restarts))])
+                avg_f1 = np.average([get_f1(rs[idx][p][jdx][1]) for jdx in range(len(random_restarts))])
+                std_f1 = np.std([get_f1(rs[idx][p][jdx][1]) for jdx in range(len(random_restarts))])
+                avg_tr_f1 = np.average([get_f1(rs[idx][p][jdx][3]) for jdx in range(len(random_restarts))])
+                std_tr_f1 = np.std([get_f1(rs[idx][p][jdx][3]) for jdx in range(len(random_restarts))])
+                avg_tr_loss = np.average([rs[idx][p][jdx][4] for jdx in range(len(random_restarts))])
+                std_tr_loss = np.std([rs[idx][p][jdx][4] for jdx in range(len(random_restarts))])
+                avg_tr_epoch = np.average([rs[idx][p][jdx][5] for jdx in range(len(random_restarts))])
+                std_tr_epoch = np.std([rs[idx][p][jdx][5] for jdx in range(len(random_restarts))])
                 print("  " + p + ":\tacc %0.3f+/-%0.3f" % (avg_acc, std_acc) +
                       "\t(train: %0.3f+/-%0.3f" % (avg_tr_acc, std_tr_acc) + ")")
                 print("  \tf1  %0.3f+/-%0.3f" % (avg_f1, std_f1) +
                       "\t(train: %0.3f+/-%0.3f" % (avg_tr_f1, std_tr_f1) + ")")
                 print("  \ttrain loss %.3f+/-%.3f" % (avg_tr_loss, std_tr_loss))
                 print("  \ttrain epochs %.3f+/-%.3f" % (avg_tr_epoch, std_tr_epoch))
-
-        # Write out results for all seeds so that a downstream script can process them for stat sig.
-        if args.perf_outfile is not None:
-            print("Writing results to '" + args.perf_outfile + "'...")
-            with open(args.perf_outfile, 'w') as f:
-                json.dump([{p: {"acc": [rs[idx][p][jdx][0] for jdx in range(len(ff_random_restarts))],
-                                "tr_acc": [rs[idx][p][jdx][2] for jdx in range(len(ff_random_restarts))],
-                                "f1": [get_f1(rs[idx][p][jdx][1]) for jdx in range(len(ff_random_restarts))],
-                                "tr_f1": [get_f1(rs[idx][p][jdx][3]) for jdx in range(len(ff_random_restarts))]}
-                            for p in preps} for idx in range(len(rs))], f)
-            print("... done")
 
 
 if __name__ == "__main__":
@@ -590,13 +590,7 @@ if __name__ == "__main__":
                               " the M labels are rounded down to N."))
     parser.add_argument('--verbose', type=int, required=False, default=0,
                         help="verbosity level")
-    parser.add_argument('--hyperparam_infile', type=str, required=False,
-                        help="input json for model hyperparameters")
-    parser.add_argument('--perf_outfile', type=str, required=False,
-                        help="output json for model performance")
-    parser.add_argument('--ff_epochs', type=int, required=False,
-                        help="override default number of epochs")
-    parser.add_argument('--ff_random_restarts', type=str, required=False,
+    parser.add_argument('--random_restarts', type=str, required=False,
                         help="comma-separated list of random seeds to use; presents avg + stddev data instead of cms")
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     main(parser.parse_args(), device)
