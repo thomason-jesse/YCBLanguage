@@ -7,6 +7,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 import os
+import sys
 from functools import reduce
 from utils import *
 
@@ -297,6 +298,8 @@ class ShrinkingFFModel(nn.Module):
             self.activation = torch.nn.ReLU().to(dv)
         elif activation == 'tanh':
             self.activation = torch.nn.Tanh().to(dv)
+        elif activation == 'sigmoid':
+            self.activation = torch.nn.Sigmoid().to(dv)
         else:
             sys.exit("unrecognized activation '%s'" % activation)
         self.dropout = torch.nn.Dropout(dropout).to(dv)
@@ -368,63 +371,38 @@ class ConvToLinearModel(nn.Module):
         out_channels_factor = 2
         kernel = (3, 3)
         stride = (3, 3)
-        self.enc1 = torch.nn.Conv2d(channels,
-                                    channels * out_channels_factor,
-                                    kernel, stride=1).to(dv)
-        self.mp1 = torch.nn.MaxPool2d(kernel, stride=stride).to(dv)
+
         if activation == 'relu':
-            self.act1 = torch.nn.ReLU().to(dv)
+            act = torch.nn.ReLU()
         elif activation == 'tanh':
-            self.act1 = torch.nn.Tanh().to(dv)
+            act = torch.nn.Tanh()
+        elif activation == 'sigmoid':
+            act = torch.nn.Sigmoid()
         else:
             sys.exit("unrecognized activation '%s'" % activation)
-        self.enc2 = torch.nn.Conv2d(channels * out_channels_factor,
-                                    channels * out_channels_factor * out_channels_factor,
-                                    kernel).to(dv)
-        self.mp2 = torch.nn.MaxPool2d(kernel, stride=stride).to(dv)
-        if activation == 'relu':
-            self.act2 = torch.nn.ReLU().to(dv)
-        elif activation == 'tanh':
-            self.act2 = torch.nn.Tanh().to(dv)
-        else:
-            sys.exit("unrecognized activation '%s'" % activation)
-        self.enc3 = torch.nn.Conv2d(channels * out_channels_factor * out_channels_factor,
-                                    channels * out_channels_factor * out_channels_factor * out_channels_factor,
-                                    kernel).to(dv)
-        self.mp3 = torch.nn.MaxPool2d(kernel, stride=stride, padding=1).to(dv)
-        if activation == 'relu':
-            self.act3 = torch.nn.ReLU().to(dv)
-        elif activation == 'tanh':
-            self.act3 = torch.nn.Tanh().to(dv)
-        else:
-            sys.exit("unrecognized activation '%s'" % activation)
-        self.conv_out_dim = [1, 2]  # Output dimensions from final max pool.
-        self.final_output_channels = channels * out_channels_factor * out_channels_factor * out_channels_factor
-        self.fc = torch.nn.Linear(self.conv_out_dim[0] * self.conv_out_dim[1] *
-                                  self.final_output_channels,
-                                  hidden_dim).to(dv)
+
+        layers = [
+            nn.Conv2d(channels, channels * out_channels_factor,
+                      kernel, stride=1),
+            nn.MaxPool2d(kernel, stride=stride),
+            act,
+            nn.Conv2d(channels * out_channels_factor,
+                      channels * out_channels_factor **2, kernel),
+            nn.MaxPool2d(kernel, stride=stride),
+            act,
+            nn.Conv2d(channels * out_channels_factor ** 2,
+                      channels * out_channels_factor ** 3, kernel),
+            nn.MaxPool2d(kernel, stride=stride, padding=1),
+            act,
+        ]
+        self.conv_stack = nn.Sequential(*layers)
+
+        conv_out_dim = [1, 2]  # Output dimensions from final max pool.
+        final_output_channels = channels * out_channels_factor ** 3
+        self.fc = torch.nn.Linear(conv_out_dim[0] * conv_out_dim[1] *
+                                  final_output_channels, hidden_dim)
+        
 
     def forward(self, im):
-
-        # print("im\t" + str(im.shape))  # DEBUG
-        eim = self.enc1(im)
-        # print("enc1\t" + str(eim.shape))  # DEBUG
-        eim = self.mp1(eim)
-        # print("mp1\t" + str(eim.shape))  # DEBUG
-        eim = self.act1(eim)
-        eim = self.enc2(eim)
-        # print("enc2\t" + str(eim.shape))  # DEBUG
-        eim = self.mp2(eim)
-        # print("mp2\t" + str(eim.shape))  # DEBUG
-        eim = self.act2(eim)
-        eim = self.enc3(eim)
-        # print("enc3\t" + str(eim.shape))  # DEBUG
-        eim = self.mp3(eim)
-        eim = self.act3(eim)
-        # print("mp3\t" + str(eim.shape))  # DEBUG
-        # TODO: is this im.shape[0] necessary? is that... the batch? seems wonky.
-        fc_in = eim.view((im.shape[0], self.final_output_channels * self.conv_out_dim[0] * self.conv_out_dim[1]))
-        # print("view\t" + str(fc_in.shape))  # DEBUG
-        h = self.fc(fc_in)
-
-        return h
+        eim = self.conv_stack(im)
+        return self.fc(eim.view((im.shape[0], -1)))

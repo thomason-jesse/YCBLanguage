@@ -29,23 +29,23 @@ def main(args, dv):
 
     # Set hyperparameters, some of which are on a per-preposition basis.
     batch_size = 8  # TODO: hyperparam to set sensibly
-    num_epochs = 10
+    num_epochs = 30
     hyperparam = {p: {} for p in preps}
     # fixed dimension to reduce RGBD, language, and vision representations to.
-    hyperparam["in"]["hidden_dim"] = 50
+    hyperparam["in"]["hidden_dim"] = 32
     hyperparam["on"]["hidden_dim"] = 50
     # Dropout
-    hyperparam["in"]["dropout"] = 0.1
+    hyperparam["in"]["dropout"] = 0.3
     hyperparam["on"]["dropout"] = 0.1
     # Learning rate
-    hyperparam["in"]["learning_rate"] = 0.0001
+    hyperparam["in"]["learning_rate"] = 0.01
     hyperparam["on"]["learning_rate"] = 0.0001
     # Optimizer
-    hyperparam["in"]["opt"] = 'sgd'
+    hyperparam["in"]["opt"] = 'adam'
     hyperparam["on"]["opt"] = 'sgd'
     # Activation
     hyperparam["in"]["activation"] = 'relu'
-    hyperparam["on"]["activation"] = 'tanh'
+    hyperparam["on"]["activation"] = 'relu'
 
 
     # labels to use.
