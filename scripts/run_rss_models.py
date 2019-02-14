@@ -4,15 +4,8 @@ __author__ = 'thomason-jesse'
 
 import argparse
 import json
-import os
-import pandas as pd
-from PIL import Image
 from models import *
-from sklearn.naive_bayes import GaussianNB
-from torchvision.models import resnet
-from torchvision.transforms import ToTensor
-from torchvision.transforms import Normalize
-from torchvision.transforms.functional import resize
+from scipy.stats import ttest_ind
 from tqdm import tqdm
 from utils import *
 
@@ -114,7 +107,7 @@ def main(args, dv):
 
         train_classes = set([int(v.item()) for v in tr_outputs[p]])
         test_classes = set([int(v.item()) for v in te_outputs[p]])
-        if (train_classes != test_classes):
+        if train_classes != test_classes:
             print("...... WARNING: train classes " + str(train_classes) + " do not match test classes "
                   + str(test_classes) + " for " + p + "; will use union")
         classes = list(train_classes.union(test_classes))
@@ -612,6 +605,13 @@ def main(args, dv):
                       "\t(train: %0.3f+/-%0.3f" % (avg_tr_f1, std_tr_f1) + ")")
                 print("  \ttrain loss %.3f+/-%.3f" % (avg_tr_loss, std_tr_loss))
                 print("  \ttrain epochs %.3f+/-%.3f" % (avg_tr_epoch, std_tr_epoch))
+
+                # Stats tests.
+                for jdx in range(idx):
+                    _, pv = ttest_ind([rs[idx][p][kdx][0] for kdx in range(len(random_restarts))],
+                                      [rs[jdx][p][kdx][0] for kdx in range(len(random_restarts))],
+                                      equal_var=False)  # TODO: could maybe relax this to true for non-MC.
+                    print("  \t%s p-value %.3f" % (bs[jdx], pv))
 
 
 if __name__ == "__main__":
