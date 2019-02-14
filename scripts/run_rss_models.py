@@ -21,6 +21,10 @@ def keep_all_but(l1, l2, keep_but):
     return [l1[idx] for idx in range(len(l1)) if l2[idx] != keep_but]
 
 
+def return_input(x):
+    return x
+
+
 def main(args, dv):
 
     # Near universals it would be better to read from data but which we're hard-coding.
@@ -28,25 +32,28 @@ def main(args, dv):
     num_trials = 5  # fixed back in prep_torch_data
 
     # Set hyperparameters, some of which are on a per-preposition basis.
-    batch_size = 8  # TODO: hyperparam to set sensibly
+    batch_size = 8
     num_epochs = 30
+
     hyperparam = {p: {} for p in preps}
-    # fixed dimension to reduce RGBD, language, and vision representations to.
+    # Input transformation (RGBD)
+    hyperparam["in"]["rgbd_inp_trans"] = None
+    hyperparam["on"]["rgbd_inp_trans"] = 'tanh'
+    # fixed hidden dimension (RGBD, L+V)
     hyperparam["in"]["hidden_dim"] = 32
-    hyperparam["on"]["hidden_dim"] = 50
-    # Dropout
+    hyperparam["on"]["hidden_dim"] = 32
+    # Dropout (RGBD, L+V)
     hyperparam["in"]["dropout"] = 0.3
-    hyperparam["on"]["dropout"] = 0.1
-    # Learning rate
-    hyperparam["in"]["learning_rate"] = 0.01
+    hyperparam["on"]["dropout"] = 0.3
+    # Learning rate (RGBD, L+V)
+    hyperparam["in"]["learning_rate"] = 0.0001
     hyperparam["on"]["learning_rate"] = 0.0001
-    # Optimizer
+    # Optimizer (RGBD, L+V)
     hyperparam["in"]["opt"] = 'adam'
-    hyperparam["on"]["opt"] = 'sgd'
-    # Activation
+    hyperparam["on"]["opt"] = 'adam'
+    # Activation (RGBD, L+V)
     hyperparam["in"]["activation"] = 'relu'
     hyperparam["on"]["activation"] = 'relu'
-
 
     # labels to use.
     train_label = args.train_objective + "_label"
@@ -118,6 +125,11 @@ def main(args, dv):
     random_restarts = None if args.random_restarts is None else \
         [int(s) for s in args.random_restarts.split(',')]
 
+    # If running with seeds, set deterministic CuDNN behavior.
+    if random_restarts is not None:
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+
     # Majority class baseline.
     if 'mc' in models:
         print("Running majority class baseline...")
@@ -125,6 +137,19 @@ def main(args, dv):
         rs.append({})
         for p in preps:
             rs[-1][p] = run_majority_class([int(c[0]) for c in tr_outputs[p].detach().data.cpu().numpy().tolist()],
+                                           [int(c[0]) for c in te_outputs[p].detach().data.cpu().numpy().tolist()],
+                                           len(classes))
+            if random_restarts is not None:
+                rs[-1][p] = [rs[-1][p] for _ in range(len(random_restarts))]
+        print("... done")
+
+    # Majority class baseline.
+    if 'omc' in models:
+        print("Running oracle majority class baseline...")
+        bs.append("Oracle Majority Class")
+        rs.append({})
+        for p in preps:
+            rs[-1][p] = run_majority_class([int(c[0]) for c in te_outputs[p].detach().data.cpu().numpy().tolist()],
                                            [int(c[0]) for c in te_outputs[p].detach().data.cpu().numpy().tolist()],
                                            len(classes))
             if random_restarts is not None:
@@ -142,6 +167,13 @@ def main(args, dv):
                 del rs[-1]
                 continue
 
+            if hyperparam[p]["rgbd_inp_trans"] is None:
+                intrans = return_input
+            elif hyperparam[p]["rgbd_inp_trans"] == 'tanh':
+                intrans = torch.tanh
+            else:
+                sys.exit("Unrecognized input transformation %s" % hyperparam[p]["in_trans"])
+
             # Couple the RGB and D inputs to feed into the paired inputs of the conv network.
             # TODO: closely vet training procedure wrt randomization of input order.
             tr_inputs = [[tr_inputs_rgb[p][idx], tr_inputs_d[p][idx]] for idx in range(len(tr_outputs[p]))]
@@ -153,14 +185,15 @@ def main(args, dv):
             else:
                 seeds = random_restarts
                 rs[-1][p] = []
-            for seed in tqdm(seeds):
+            for seed in tqdm(seeds, desc="for '%s'" % p):
                 if seed is not None:
                     # print("... %s with seed %d ..." % (p, seed))
                     np.random.seed(seed)
                     torch.manual_seed(seed)
 
                 # Instantiate fusion model for RGB and D inputs, then run them through a prediction model to get logits.
-                rgbd_fusion_model = ConvFusionFFModel(dv, 3, 1, hyperparam[p]["hidden_dim"], hyperparam[p]["activation"]).to(dv)
+                rgbd_fusion_model = ConvFusionFFModel(dv, 3, 1, hyperparam[p]["hidden_dim"],
+                                                      hyperparam[p]["activation"]).to(dv)
                 model = PredModel(dv, rgbd_fusion_model, hyperparam[p]["hidden_dim"], len(classes)).to(dv)
 
                 # Instantiate loss and optimizer.
@@ -199,8 +232,8 @@ def main(args, dv):
                                                  tr_inputs[0][1].shape[2], tr_inputs[0][1].shape[3])).to(dv)]
                         batch_gold = torch.zeros(batch_size * num_trials).to(dv)
                         for bidx in range(batch_size):
-                            batch_in[0][bidx:bidx+num_trials, :, :, :] = tr_inputs[tidx][0]
-                            batch_in[1][bidx:bidx+num_trials, :] = tr_inputs[tidx][1]
+                            batch_in[0][bidx:bidx+num_trials, :, :, :] = intrans(tr_inputs[tidx][0])
+                            batch_in[1][bidx:bidx+num_trials, :] = intrans(tr_inputs[tidx][1])
                             batch_gold[bidx:bidx+num_trials] = np.repeat(tro[tidx][0], num_trials)
 
                             tidx += 1
@@ -226,7 +259,7 @@ def main(args, dv):
                         model.eval()
                         cm = np.zeros(shape=(len(classes), len(classes)))
                         for jdx in range(len(te_inputs)):
-                            trials_logits = model(te_inputs[jdx])  # will be full batch size wide
+                            trials_logits = model([intrans(te_inputs[jdx][0]), intrans(te_inputs[jdx][1])])
                             v = np.zeros(len(classes))
                             for tdx in range(num_trials):  # take a vote over trials (not whole logit size)
                                 v[int(trials_logits[tdx].argmax(0))] += 1
@@ -288,7 +321,7 @@ def main(args, dv):
                                          verbose=args.verbose, batch_size=batch_size)
             else:
                 rs[-1][p] = []
-                for seed in tqdm(random_restarts):
+                for seed in tqdm(random_restarts, desc="for '%s'" % p):
                     # print("... with seed " + str(seed) + "...")
                     np.random.seed(seed)
                     torch.manual_seed(seed)
@@ -318,7 +351,7 @@ def main(args, dv):
                                          verbose=args.verbose, batch_size=batch_size)
             else:
                 rs[-1][p] = []
-                for seed in tqdm(random_restarts):
+                for seed in tqdm(random_restarts, desc="for '%s'" % p):
                     # print("... with seed " + str(seed) + "...")
                     np.random.seed(seed)
                     torch.manual_seed(seed)
@@ -349,7 +382,7 @@ def main(args, dv):
                                          verbose=args.verbose, batch_size=batch_size)
             else:
                 rs[-1][p] = []
-                for seed in tqdm(random_restarts):
+                for seed in tqdm(random_restarts, desc="for '%s'" % p):
                     # print("... with seed " + str(seed) + "...")
                     np.random.seed(seed)
                     torch.manual_seed(seed)
@@ -375,6 +408,13 @@ def main(args, dv):
                 del rs[-1]
                 continue
 
+            if hyperparam[p]["rgbd_inp_trans"] is None:
+                intrans = return_input
+            elif hyperparam[p]["rgbd_inp_trans"] == 'tanh':
+                intrans = torch.tanh
+            else:
+                sys.exit("Unrecognized input transformation %s" % hyperparam[p]["in_trans"])
+
             # Couple the RGB, D, L, V inputs to feed into the conv and FF networks.
             # TODO: closely vet training procedure wrt randomization of input order.
             tr_inputs = [[tr_inputs_rgb[p][idx], tr_inputs_d[p][idx], tr_inputs_l[p][idx], tr_inputs_v[p][idx]]
@@ -390,7 +430,7 @@ def main(args, dv):
             else:
                 seeds = random_restarts
                 rs[-1][p] = []
-            for seed in tqdm(seeds):
+            for seed in tqdm(seeds, desc="for '%s'" % p):
                 if seed is not None:
                     # print("... %s with seed %d ..." % (p, seed))
                     np.random.seed(seed)
@@ -398,7 +438,8 @@ def main(args, dv):
 
                 # Instantiate convolutional RGBD fusion model and feed-forward L+V fusion model, then tie them together with a
                 # multi-model prediction model that predicts logits from their outputs.
-                rgbd_fusion_model = ConvFusionFFModel(dv, 3, 1, hyperparam[p]["hidden_dim"], hyperparam[p]["activation"]).to(dv)
+                rgbd_fusion_model = ConvFusionFFModel(dv, 3, 1, hyperparam[p]["hidden_dim"],
+                                                      hyperparam[p]["activation"]).to(dv)
                 lv_fusion_model = ShrinkingFusionFFModel(dv, len(tr_inputs[0][2]), len(tr_inputs[0][3]),
                                                          hyperparam[p]["hidden_dim"], hyperparam[p]["dropout"],
                                                          hyperparam[p]["activation"]).to(dv)
@@ -449,8 +490,8 @@ def main(args, dv):
                                      torch.zeros((batch_size * num_trials, tr_inputs[0][3].shape[0])).to(dv)]]
                         batch_gold = torch.zeros(batch_size * num_trials).to(dv)
                         for bidx in range(batch_size):
-                            batch_in[0][0][bidx:bidx+num_trials, :, :, :] = tr_inputs[tidx][0]
-                            batch_in[0][1][bidx:bidx+num_trials, :] = tr_inputs[tidx][1]
+                            batch_in[0][0][bidx:bidx+num_trials, :, :, :] = intrans(tr_inputs[tidx][0])
+                            batch_in[0][1][bidx:bidx+num_trials, :] = intrans(tr_inputs[tidx][1])
                             # use the same L, V vector across all trials for this pair
                             batch_in[1][0][bidx:bidx+num_trials, :] = tr_inputs[tidx][2].repeat(num_trials, 1)
                             batch_in[1][1][bidx:bidx+num_trials, :] = tr_inputs[tidx][3].repeat(num_trials, 1)
@@ -480,8 +521,8 @@ def main(args, dv):
                         cm = np.zeros(shape=(len(classes), len(classes)))
                         for jdx in range(len(te_inputs)):
 
-                            te_in = [[torch.tensor(te_inputs[jdx][0]).to(dv),
-                                      torch.tensor(te_inputs[jdx][1]).to(dv)],
+                            te_in = [[torch.tensor(intrans(te_inputs[jdx][0])).to(dv),
+                                      torch.tensor(intrans(te_inputs[jdx][1])).to(dv)],
                                      [torch.tensor(te_inputs[jdx][2].repeat(num_trials, 1)).to(dv),
                                       torch.tensor(te_inputs[jdx][3].repeat(num_trials, 1)).to(dv)]]
                             trials_logits = model(te_in)  # will be full batch size wide

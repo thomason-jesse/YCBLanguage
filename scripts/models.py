@@ -401,7 +401,6 @@ class ConvToLinearModel(nn.Module):
         final_output_channels = channels * out_channels_factor ** 3
         self.fc = torch.nn.Linear(conv_out_dim[0] * conv_out_dim[1] *
                                   final_output_channels, hidden_dim)
-        
 
     def forward(self, im):
         eim = self.conv_stack(im)
