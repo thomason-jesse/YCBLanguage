@@ -41,13 +41,13 @@ def main(args, dv):
     hyperparam["on"]["rgbd_inp_trans"] = 'tanh'
     # fixed hidden dimension (RGBD, L+V)
     hyperparam["in"]["hidden_dim"] = 32
-    hyperparam["on"]["hidden_dim"] = 32
+    hyperparam["on"]["hidden_dim"] = 16
     # Dropout (RGBD, L+V)
     hyperparam["in"]["dropout"] = 0.3
-    hyperparam["on"]["dropout"] = 0.3
+    hyperparam["on"]["dropout"] = 0.1
     # Learning rate (RGBD, L+V)
-    hyperparam["in"]["learning_rate"] = 0.0001
-    hyperparam["on"]["learning_rate"] = 0.0001
+    hyperparam["in"]["learning_rate"] = 0.01
+    hyperparam["on"]["learning_rate"] = 0.01
     # Optimizer (RGBD, L+V)
     hyperparam["in"]["opt"] = 'adam'
     hyperparam["on"]["opt"] = 'adam'
@@ -255,11 +255,15 @@ def main(args, dv):
                     tloss /= batches_run
                     tr_acc = get_acc(trcm)
 
+                    yonatan_hack = True  # hellz yes
                     with torch.no_grad():
                         model.eval()
                         cm = np.zeros(shape=(len(classes), len(classes)))
                         for jdx in range(len(te_inputs)):
-                            trials_logits = model([intrans(te_inputs[jdx][0]), intrans(te_inputs[jdx][1])])
+                            if yonatan_hack:
+                              trials_logits = model([te_inputs[jdx][0], te_inputs[jdx][1]])
+                            else:
+                              trials_logits = model([intrans(te_inputs[jdx][0]), intrans(te_inputs[jdx][1])])
                             v = np.zeros(len(classes))
                             for tdx in range(num_trials):  # take a vote over trials (not whole logit size)
                                 v[int(trials_logits[tdx].argmax(0))] += 1
