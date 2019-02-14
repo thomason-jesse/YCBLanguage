@@ -30,14 +30,14 @@ def main(args, dv):
 
     hyperparam = {p: {} for p in preps}
     # Input transformation (RGBD)
-    hyperparam["in"]["rgbd_inp_trans"] = None
+    hyperparam["in"]["rgbd_inp_trans"] = 'tanh'
     hyperparam["on"]["rgbd_inp_trans"] = 'tanh'
     # fixed hidden dimension (RGBD, L+V)
     hyperparam["in"]["hidden_dim"] = 32
-    hyperparam["on"]["hidden_dim"] = 16
+    hyperparam["on"]["hidden_dim"] = 32
     # Dropout (RGBD, L+V)
     hyperparam["in"]["dropout"] = 0.3
-    hyperparam["on"]["dropout"] = 0.1
+    hyperparam["on"]["dropout"] = 0.3
     # Learning rate (RGBD, L+V)
     hyperparam["in"]["learning_rate"] = 0.01
     hyperparam["on"]["learning_rate"] = 0.01
@@ -65,6 +65,7 @@ def main(args, dv):
     te_inputs_v = {}
     te_inputs_rgb = {}
     te_inputs_d = {}
+
     for p in preps:
         fn = args.input + '.' + p
         with open(fn, 'r') as f:
@@ -92,7 +93,6 @@ def main(args, dv):
                                             dtype=torch.float).to(dv) if d["train"]["rgb"] is not None else None
             tr_inputs_d[p] = torch.tensor(keep_all_but(d["train"]["d"], d["train"][train_label], [-1]),
                                           dtype=torch.float).to(dv) if d["train"]["d"] is not None else None
-
             te_outputs[p] = torch.tensor(keep_all_but(d["test"][test_label], d["test"][test_label], [-1]),
                                          dtype=torch.float).to(dv)
             te_inputs_l[p] = torch.tensor(keep_all_but(d["test"]["lang"], d["test"][test_label], [-1]),
@@ -164,6 +164,8 @@ def main(args, dv):
                 intrans = return_input
             elif hyperparam[p]["rgbd_inp_trans"] == 'tanh':
                 intrans = torch.tanh
+            elif hyperparam[p]["rgbd_inp_trans"] == 'sigmoid':
+                intrans = torch.sigmoid
             else:
                 sys.exit("Unrecognized input transformation %s" % hyperparam[p]["in_trans"])
 
@@ -225,7 +227,7 @@ def main(args, dv):
                                                  tr_inputs[0][1].shape[2], tr_inputs[0][1].shape[3])).to(dv)]
                         batch_gold = torch.zeros(batch_size * num_trials).to(dv)
                         for bidx in range(batch_size):
-                            batch_in[0][bidx:bidx+num_trials, :, :, :] = intrans(tr_inputs[tidx][0])
+                            batch_in[0][bidx:bidx+num_trials, :, :, :] = tr_inputs[tidx][0]
                             batch_in[1][bidx:bidx+num_trials, :] = intrans(tr_inputs[tidx][1])
                             batch_gold[bidx:bidx+num_trials] = np.repeat(tro[tidx][0], num_trials)
 
@@ -248,15 +250,11 @@ def main(args, dv):
                     tloss /= batches_run
                     tr_acc = get_acc(trcm)
 
-                    yonatan_hack = True  # hellz yes
                     with torch.no_grad():
                         model.eval()
                         cm = np.zeros(shape=(len(classes), len(classes)))
                         for jdx in range(len(te_inputs)):
-                            if yonatan_hack:
-                              trials_logits = model([te_inputs[jdx][0], te_inputs[jdx][1]])
-                            else:
-                              trials_logits = model([intrans(te_inputs[jdx][0]), intrans(te_inputs[jdx][1])])
+                            trials_logits = model([te_inputs[jdx][0], intrans(te_inputs[jdx][1])])
                             v = np.zeros(len(classes))
                             for tdx in range(num_trials):  # take a vote over trials (not whole logit size)
                                 v[int(trials_logits[tdx].argmax(0))] += 1
@@ -409,6 +407,8 @@ def main(args, dv):
                 intrans = return_input
             elif hyperparam[p]["rgbd_inp_trans"] == 'tanh':
                 intrans = torch.tanh
+            elif hyperparam[p]["rgbd_inp_trans"] == 'sigmoid':
+                intrans = torch.sigmoid
             else:
                 sys.exit("Unrecognized input transformation %s" % hyperparam[p]["in_trans"])
 
@@ -487,7 +487,7 @@ def main(args, dv):
                                      torch.zeros((batch_size * num_trials, tr_inputs[0][3].shape[0])).to(dv)]]
                         batch_gold = torch.zeros(batch_size * num_trials).to(dv)
                         for bidx in range(batch_size):
-                            batch_in[0][0][bidx:bidx+num_trials, :, :, :] = intrans(tr_inputs[tidx][0])
+                            batch_in[0][0][bidx:bidx+num_trials, :, :, :] = tr_inputs[tidx][0]
                             batch_in[0][1][bidx:bidx+num_trials, :] = intrans(tr_inputs[tidx][1])
                             # use the same L, V vector across all trials for this pair
                             batch_in[1][0][bidx:bidx+num_trials, :] = tr_inputs[tidx][2].repeat(num_trials, 1)
@@ -518,7 +518,7 @@ def main(args, dv):
                         cm = np.zeros(shape=(len(classes), len(classes)))
                         for jdx in range(len(te_inputs)):
 
-                            te_in = [[torch.tensor(intrans(te_inputs[jdx][0])).to(dv),
+                            te_in = [[torch.tensor(te_inputs[jdx][0]).to(dv),
                                       torch.tensor(intrans(te_inputs[jdx][1])).to(dv)],
                                      [torch.tensor(te_inputs[jdx][2].repeat(num_trials, 1)).to(dv),
                                       torch.tensor(te_inputs[jdx][3].repeat(num_trials, 1)).to(dv)]]

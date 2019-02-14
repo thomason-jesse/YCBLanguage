@@ -277,8 +277,8 @@ def main(args):
                                 # Un-normalized distance between final and initial image in RGB and depth space.
                                 rgbd_feats[f][int(ob1)][int(ob2)][0].append((t1cm - t0cm).tolist())
                                 # For depth, record features delta of 1 / depth between final and initial image.
-                                t1dm = np.divide(np.ones_like(t1dm), t1dm, out=np.zeros_like(t1dm), where=t1dm != 0)
-                                t0dm = np.divide(np.ones_like(t0dm), t0dm, out=np.zeros_like(t0dm), where=t0dm != 0)
+                                #t1dm = np.divide(np.ones_like(t1dm), t1dm, out=np.zeros_like(t1dm), where=t1dm != 0)
+                                #t0dm = np.divide(np.ones_like(t0dm), t0dm, out=np.zeros_like(t0dm), where=t0dm != 0)
                                 rgbd_feats[f][int(ob1)][int(ob2)][1].append(np.expand_dims(t1dm - t0dm, axis=0).tolist())
 
                         num_pairs[f] += 1
