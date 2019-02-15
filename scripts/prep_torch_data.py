@@ -283,9 +283,9 @@ def main(args):
             # 5 trials (maximum) per object pair
             # 3 input channels for RGB, 1 for depth
             # 48 x 64 is the region size downsampled from the camera.
-            tr_inputs_rgb = np.zeros((len(available_train[p]), 5, 3, 48, 64))
+            tr_inputs_rgb = np.zeros((len(available_train[p]), 5, 4, 48, 64))
             tr_inputs_d = np.zeros((len(available_train[p]), 5, 1, 48, 64))
-            te_inputs_rgb = np.zeros((len(available_test[p]), 5, 3, 48, 64))
+            te_inputs_rgb = np.zeros((len(available_test[p]), 5, 4, 48, 64))
             te_inputs_d = np.zeros((len(available_test[p]), 5, 1, 48, 64))
             for rgb_in, d_in, orig_in in [[tr_inputs_rgb, tr_inputs_d, tr_f_rgbd],
                                           [te_inputs_rgb, te_inputs_d, te_f_rgbd]]:

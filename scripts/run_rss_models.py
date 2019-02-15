@@ -17,6 +17,8 @@ def keep_all_but(l1, l2, keep_but):
 def return_input(x):
     return x
 
+def intrans2(x):
+    return x
 
 def main(args, dv):
 
@@ -33,14 +35,14 @@ def main(args, dv):
     hyperparam["in"]["rgbd_inp_trans"] = 'tanh'
     hyperparam["on"]["rgbd_inp_trans"] = 'tanh'
     # fixed hidden dimension (RGBD, L+V)
-    hyperparam["in"]["hidden_dim"] = 32
-    hyperparam["on"]["hidden_dim"] = 32
+    hyperparam["in"]["hidden_dim"] = 64
+    hyperparam["on"]["hidden_dim"] = 64
     # Dropout (RGBD, L+V)
     hyperparam["in"]["dropout"] = 0.3
     hyperparam["on"]["dropout"] = 0.3
     # Learning rate (RGBD, L+V)
     hyperparam["in"]["learning_rate"] = 0.01
-    hyperparam["on"]["learning_rate"] = 0.01
+    hyperparam["on"]["learning_rate"] = 0.1
     # Optimizer (RGBD, L+V)
     hyperparam["in"]["opt"] = 'adam'
     hyperparam["on"]["opt"] = 'adam'
@@ -187,7 +189,7 @@ def main(args, dv):
                     torch.manual_seed(seed)
 
                 # Instantiate fusion model for RGB and D inputs, then run them through a prediction model to get logits.
-                rgbd_fusion_model = ConvFusionFFModel(dv, 3, 1, hyperparam[p]["hidden_dim"],
+                rgbd_fusion_model = ConvFusionFFModel(dv, 4, 1, hyperparam[p]["hidden_dim"],
                                                       hyperparam[p]["activation"]).to(dv)
                 model = PredModel(dv, rgbd_fusion_model, hyperparam[p]["hidden_dim"], len(classes)).to(dv)
 
@@ -254,7 +256,7 @@ def main(args, dv):
                         model.eval()
                         cm = np.zeros(shape=(len(classes), len(classes)))
                         for jdx in range(len(te_inputs)):
-                            trials_logits = model([te_inputs[jdx][0], intrans(te_inputs[jdx][1])])
+                            trials_logits = model([intrans2(te_inputs[jdx][0]), intrans(te_inputs[jdx][1])])
                             v = np.zeros(len(classes))
                             for tdx in range(num_trials):  # take a vote over trials (not whole logit size)
                                 v[int(trials_logits[tdx].argmax(0))] += 1
@@ -435,7 +437,7 @@ def main(args, dv):
 
                 # Instantiate convolutional RGBD fusion model and feed-forward L+V fusion model, then tie them together with a
                 # multi-model prediction model that predicts logits from their outputs.
-                rgbd_fusion_model = ConvFusionFFModel(dv, 3, 1, hyperparam[p]["hidden_dim"],
+                rgbd_fusion_model = ConvFusionFFModel(dv, 4, 1, hyperparam[p]["hidden_dim"],
                                                       hyperparam[p]["activation"]).to(dv)
                 lv_fusion_model = ShrinkingFusionFFModel(dv, len(tr_inputs[0][2]), len(tr_inputs[0][3]),
                                                          hyperparam[p]["hidden_dim"], hyperparam[p]["dropout"],
@@ -487,7 +489,7 @@ def main(args, dv):
                                      torch.zeros((batch_size * num_trials, tr_inputs[0][3].shape[0])).to(dv)]]
                         batch_gold = torch.zeros(batch_size * num_trials).to(dv)
                         for bidx in range(batch_size):
-                            batch_in[0][0][bidx:bidx+num_trials, :, :, :] = tr_inputs[tidx][0]
+                            batch_in[0][0][bidx:bidx+num_trials, :, :, :] = intrans2(tr_inputs[tidx][0])
                             batch_in[0][1][bidx:bidx+num_trials, :] = intrans(tr_inputs[tidx][1])
                             # use the same L, V vector across all trials for this pair
                             batch_in[1][0][bidx:bidx+num_trials, :] = tr_inputs[tidx][2].repeat(num_trials, 1)
@@ -518,7 +520,7 @@ def main(args, dv):
                         cm = np.zeros(shape=(len(classes), len(classes)))
                         for jdx in range(len(te_inputs)):
 
-                            te_in = [[torch.tensor(te_inputs[jdx][0]).to(dv),
+                            te_in = [[torch.tensor(intrans2(te_inputs[jdx][0])).to(dv),
                                       torch.tensor(intrans(te_inputs[jdx][1])).to(dv)],
                                      [torch.tensor(te_inputs[jdx][2].repeat(num_trials, 1)).to(dv),
                                       torch.tensor(te_inputs[jdx][3].repeat(num_trials, 1)).to(dv)]]

@@ -275,10 +275,11 @@ def main(args):
                             # TODO: some kind of normalization of both RGB and depth data.
                             if rgbd_seen[f][int(ob1)][int(ob2)] == p:
                                 # Un-normalized distance between final and initial image in RGB and depth space.
-                                rgbd_feats[f][int(ob1)][int(ob2)][0].append((t1cm - t0cm).tolist())
-                                # For depth, record features delta of 1 / depth between final and initial image.
-                                #t1dm = np.divide(np.ones_like(t1dm), t1dm, out=np.zeros_like(t1dm), where=t1dm != 0)
-                                #t0dm = np.divide(np.ones_like(t0dm), t0dm, out=np.zeros_like(t0dm), where=t0dm != 0)
+                                t0cm = t0cm/np.sum(t0cm, axis=0, keepdims=True)
+                                t1cm = t1cm/np.sum(t1cm, axis=0, keepdims=True)
+                                rgb_dist = np.sqrt(np.sum(np.power(t1cm - t0cm,2), axis=0, keepdims=True))
+                                joint = np.concatenate((t1cm, rgb_dist), 0)
+                                rgbd_feats[f][int(ob1)][int(ob2)][0].append(joint.tolist())
                                 rgbd_feats[f][int(ob1)][int(ob2)][1].append(np.expand_dims(t1dm - t0dm, axis=0).tolist())
 
                         num_pairs[f] += 1
