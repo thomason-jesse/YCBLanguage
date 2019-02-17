@@ -146,10 +146,9 @@ def run_ff_model(dv, outdir, model_desc,
     else:
         raise ValueError('Unrecognized opt specification "' + opt + '".')
 
-    best_acc = best_cm = tr_acc_at_best = trcm_at_best = tloss_at_best = t_epochs = None
+    best_acc = best_cm = tr_acc_at_best = trcm_at_best = tloss_at_best = t_epochs = best_loss = None
     if num_modalities == 1:
         idxs = list(range(len(tr_inputs)))
-        # TODO: closely vet training procedure wrt randomization of input order.
         np.random.shuffle(idxs)
         tr_inputs = [tr_inputs[idx] for idx in idxs]
         num_tr = len(tr_inputs)
@@ -157,13 +156,13 @@ def run_ff_model(dv, outdir, model_desc,
     else:
         idxs = list(range(len(tr_inputs[0])))
         np.random.shuffle(idxs)
+        num_tr = len(tr_inputs[0])
+        num_te = len(te_inputs[0])
         for midx in range(num_modalities):
             tr_inputs[midx] = [tr_inputs[midx][idx] for idx in idxs]
-            num_tr = len(tr_inputs[midx])
-            num_te = len(te_inputs[midx])
     tro = tr_outputs[idxs, :]
-    result = None
-    last_saved_fn = None
+    last_saved_acc_fn = None
+    last_saved_loss_fn = None
     for epoch in range(epochs):
         tloss = 0
         trcm = np.zeros(shape=(outwidth, outwidth))
@@ -208,20 +207,25 @@ def run_ff_model(dv, outdir, model_desc,
 
         with torch.no_grad():
             model.eval()
+            te_loss = 0
             cm = np.zeros(shape=(outwidth, outwidth))
             for jdx in range(num_te):
                 if num_modalities == 1:
                     tein = te_inputs[jdx]
-                    logit_am_dim = 0
                 else:
                     tein = []
                     for midx in range(num_modalities):
                         tein.append(torch.zeros((1, te_inputs[midx][0].shape[0])).to(dv))
                     for midx in range(num_modalities):
                         tein[midx][0, :] = te_inputs[midx][jdx]
-                    logit_am_dim = 1
                 logits = model(tein)
-                cm[int(te_outputs[jdx])][int(logits.argmax(logit_am_dim))] += 1
+                gold_logits = torch.tensor(te_outputs[jdx]).to(dv)
+                if num_modalities == 1:
+                    logits = logits.unsqueeze(0)
+                loss = loss_function(logits, gold_logits.long())
+                te_loss += loss.data.item()
+                cm[int(te_outputs[jdx])][int(logits.argmax(1))] += 1
+            te_loss /= num_te
 
             acc = get_acc(cm)
             if best_acc is None or acc > best_acc:
@@ -234,16 +238,27 @@ def run_ff_model(dv, outdir, model_desc,
 
                 # Save best-performing model at this seed
                 # (overwritten each time better perf happens across epochs)
-                fn = os.path.join(outdir, "%s_acc-%.3f.pt" % (model_desc, best_acc))
+                fn = os.path.join(outdir, "%s_epoch-%d_acc-%.3f.pt" % (model_desc, epoch, best_acc))
                 torch.save(model.state_dict(), fn)
                 if fusion_model is not None:
                     torch.save(fusion_model.state_dict(), fn+".fm")
-                if last_saved_fn is not None:  # remove previous save
-                    os.system("rm %s" % last_saved_fn)
+                if last_saved_acc_fn is not None:  # remove previous save
+                    os.system("rm %s" % last_saved_acc_fn)
                     if fusion_model is not None:
-                        os.system("rm %s.fm" % last_saved_fn)
-                last_saved_fn = fn
+                        os.system("rm %s.fm" % last_saved_acc_fn)
+                last_saved_acc_fn = fn
 
+            if best_loss is None or te_loss < best_loss:
+                best_loss = te_loss
+                fn = os.path.join(outdir, "%s_epoch-%d_loss-%.3f.pt" % (model_desc, epoch, best_loss))
+                torch.save(model.state_dict(), fn)
+                if fusion_model is not None:
+                    torch.save(fusion_model.state_dict(), fn + ".fm")
+                if last_saved_loss_fn is not None:  # remove previous save
+                    os.system("rm %s" % last_saved_loss_fn)
+                    if fusion_model is not None:
+                        os.system("rm %s.fm" % last_saved_loss_fn)
+                last_saved_loss_fn = fn
 
         if verbose:
             print("... epoch " + str(epoch) + " train loss " + str(tloss) + "; train accuracy " + str(tr_acc) +

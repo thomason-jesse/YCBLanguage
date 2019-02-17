@@ -17,8 +17,6 @@ def keep_all_but(l1, l2, keep_but):
 def return_input(x):
     return x
 
-def intrans2(x):
-    return x
 
 def main(args, dv):
 
@@ -32,8 +30,8 @@ def main(args, dv):
 
     hyperparam = {p: {} for p in preps}
     # Input transformation (RGBD)
-    hyperparam["in"]["rgbd_inp_trans"] = 'tanh'
-    hyperparam["on"]["rgbd_inp_trans"] = 'tanh'
+    hyperparam["in"]["rgbd_inp_trans"] = None
+    hyperparam["on"]["rgbd_inp_trans"] = None
     # fixed hidden dimension (RGBD, L+V)
     hyperparam["in"]["hidden_dim"] = 64
     hyperparam["on"]["hidden_dim"] = 64
@@ -41,8 +39,10 @@ def main(args, dv):
     hyperparam["in"]["dropout"] = 0.3
     hyperparam["on"]["dropout"] = 0.3
     # Learning rate (RGBD, L+V)
-    hyperparam["in"]["learning_rate"] = 0.01
-    hyperparam["on"]["learning_rate"] = 0.1
+    hyperparam["in"]["rgbd_learning_rate"] = 0.01
+    hyperparam["on"]["rgbd_learning_rate"] = 0.01
+    hyperparam["in"]["lv_learning_rate"] = 0.01
+    hyperparam["on"]["lv_learning_rate"] = 0.001
     # Optimizer (RGBD, L+V)
     hyperparam["in"]["opt"] = 'adam'
     hyperparam["on"]["opt"] = 'adam'
@@ -172,7 +172,6 @@ def main(args, dv):
                 sys.exit("Unrecognized input transformation %s" % hyperparam[p]["in_trans"])
 
             # Couple the RGB and D inputs to feed into the paired inputs of the conv network.
-            # TODO: closely vet training procedure wrt randomization of input order.
             tr_inputs = [[tr_inputs_rgb[p][idx], tr_inputs_d[p][idx]] for idx in range(len(tr_outputs[p]))]
             te_inputs = [[te_inputs_rgb[p][idx], te_inputs_d[p][idx]] for idx in range(len(te_outputs[p]))]
 
@@ -197,13 +196,13 @@ def main(args, dv):
                 # TODO: optimizer is a hyperparam to set.
                 loss_function = nn.CrossEntropyLoss()
                 if hyperparam[p]["opt"] == 'sgd':
-                    optimizer = optim.SGD(model.parameters(), lr=hyperparam[p]["learning_rate"])
+                    optimizer = optim.SGD(model.parameters(), lr=hyperparam[p]["rgbd_learning_rate"])
                 elif hyperparam[p]["opt"] == 'adagrad':
-                    optimizer = optim.Adagrad(model.parameters(), lr=hyperparam[p]["learning_rate"])
+                    optimizer = optim.Adagrad(model.parameters(), lr=hyperparam[p]["rgbd_learning_rate"])
                 elif hyperparam[p]["opt"] == 'adam':
-                    optimizer = optim.Adam(model.parameters(), lr=hyperparam[p]["learning_rate"])
+                    optimizer = optim.Adam(model.parameters(), lr=hyperparam[p]["rgbd_learning_rate"])
                 elif hyperparam[p]["opt"] == 'rmsprop':
-                    optimizer = optim.RMSprop(model.parameters(), lr=hyperparam[p]["learning_rate"])
+                    optimizer = optim.RMSprop(model.parameters(), lr=hyperparam[p]["rgbd_learning_rate"])
                 else:
                     raise ValueError('Unrecognized opt specification "' + hyperparam[p]["opt"] + '".')
 
@@ -256,7 +255,7 @@ def main(args, dv):
                         model.eval()
                         cm = np.zeros(shape=(len(classes), len(classes)))
                         for jdx in range(len(te_inputs)):
-                            trials_logits = model([intrans2(te_inputs[jdx][0]), intrans(te_inputs[jdx][1])])
+                            trials_logits = model([te_inputs[jdx][0], intrans(te_inputs[jdx][1])])
                             v = np.zeros(len(classes))
                             for tdx in range(num_trials):  # take a vote over trials (not whole logit size)
                                 v[int(trials_logits[tdx].argmax(0))] += 1
@@ -313,7 +312,7 @@ def main(args, dv):
                                          tr_inputs_l[p], tr_outputs[p], te_inputs_l[p], te_outputs[p],
                                          tr_inputs_l[p].shape[1], hyperparam[p]["hidden_dim"], len(classes), num_modalities=1,
                                          epochs=num_epochs, dropout=hyperparam[p]["dropout"],
-                                         learning_rate=hyperparam[p]["learning_rate"], opt=hyperparam[p]["opt"],
+                                         learning_rate=hyperparam[p]["lv_learning_rate"], opt=hyperparam[p]["opt"],
                                          activation=hyperparam[p]["activation"],
                                          verbose=args.verbose, batch_size=batch_size)
             else:
@@ -327,7 +326,7 @@ def main(args, dv):
                                                   tr_inputs_l[p], tr_outputs[p], te_inputs_l[p], te_outputs[p],
                                                   tr_inputs_l[p].shape[1], hyperparam[p]["hidden_dim"], len(classes), num_modalities=1,
                                                   epochs=num_epochs, dropout=hyperparam[p]["dropout"],
-                                                  learning_rate=hyperparam[p]["learning_rate"], opt=hyperparam[p]["opt"],
+                                                  learning_rate=hyperparam[p]["lv_learning_rate"], opt=hyperparam[p]["opt"],
                                                   activation=hyperparam[p]["activation"],
                                                   verbose=args.verbose, batch_size=batch_size))
         print("... done")
@@ -343,7 +342,7 @@ def main(args, dv):
                                          tr_inputs_v[p], tr_outputs[p], te_inputs_v[p], te_outputs[p],
                                          tr_inputs_v[p].shape[1], hyperparam[p]["hidden_dim"], len(classes), num_modalities=1,
                                          epochs=num_epochs, dropout=hyperparam[p]["dropout"],
-                                         learning_rate=hyperparam[p]["learning_rate"], opt=hyperparam[p]["opt"],
+                                         learning_rate=hyperparam[p]["lv_learning_rate"], opt=hyperparam[p]["opt"],
                                          activation=hyperparam[p]["activation"],
                                          verbose=args.verbose, batch_size=batch_size)
             else:
@@ -357,7 +356,7 @@ def main(args, dv):
                                                   tr_inputs_v[p], tr_outputs[p], te_inputs_v[p], te_outputs[p],
                                                   tr_inputs_v[p].shape[1], hyperparam[p]["hidden_dim"], len(classes), num_modalities=1,
                                                   epochs=num_epochs, dropout=hyperparam[p]["dropout"],
-                                                  learning_rate=hyperparam[p]["learning_rate"], opt=hyperparam[p]["opt"],
+                                                  learning_rate=hyperparam[p]["lv_learning_rate"], opt=hyperparam[p]["opt"],
                                                   activation=hyperparam[p]["activation"],
                                                   verbose=args.verbose, batch_size=batch_size))
         print("... done")
@@ -374,7 +373,7 @@ def main(args, dv):
                                          [te_inputs_l[p], te_inputs_v[p]], te_outputs[p],
                                          None, hyperparam[p]["hidden_dim"], len(classes), num_modalities=2,
                                          epochs=num_epochs, dropout=hyperparam[p]["dropout"],
-                                         learning_rate=hyperparam[p]["learning_rate"], opt=hyperparam[p]["opt"],
+                                         learning_rate=hyperparam[p]["lv_learning_rate"], opt=hyperparam[p]["opt"],
                                          activation=hyperparam[p]["activation"],
                                          verbose=args.verbose, batch_size=batch_size)
             else:
@@ -389,185 +388,212 @@ def main(args, dv):
                                                   [te_inputs_l[p], te_inputs_v[p]], te_outputs[p],
                                                   None, hyperparam[p]["hidden_dim"], len(classes), num_modalities=2,
                                                   epochs=num_epochs, dropout=hyperparam[p]["dropout"],
-                                                  learning_rate=hyperparam[p]["learning_rate"], opt=hyperparam[p]["opt"],
+                                                  learning_rate=hyperparam[p]["lv_learning_rate"], opt=hyperparam[p]["opt"],
                                                   activation=hyperparam[p]["activation"],
                                                   verbose=args.verbose, batch_size=batch_size))
         print("... done")
 
     if 'rgbd+glove+resnet' in models:
+
+        # Load all possible pretraining parameters from give  dir.
+        lv_pretrained_fns_settings = [None]  # DEBUG
+        if args.lv_pretrained_dir is not None:
+            in_fns = []
+            on_fns = []
+            for _, _, fns in os.walk(args.lv_pretrained_dir):
+                for fn in fns:
+                    if fn.split('.')[-1] == "fm" and "loss" in fn:
+                        if "p-on" in fn:
+                            on_fns.append(os.path.join(args.lv_pretrained_dir, fn))
+                        elif "p-in" in fn:
+                            in_fns.append(os.path.join(args.lv_pretrained_dir, fn))
+            for idx in range(len(in_fns)):
+                lv_pretrained_fns_settings.append("%s,%s" % (on_fns[idx], in_fns[idx]))
+
         print("Running RGBD+GloVe+ResNet models")
-        bs.append("RGBD+GloVe+ResNet")
-        rs.append({})
-        for p in preps:
-            if tr_inputs_rgb[p] is None:
-                print("... ERROR: data had no RGBD features for prep %s" % p)
-                del bs[-1]
-                del rs[-1]
-                continue
+        for lv_pretrained_fns in lv_pretrained_fns_settings:
+            bs.append("RGBD+GloVe+ResNet")
+            if lv_pretrained_fns is not None:
+                bs[-1] += "_lv-Pretrained_" + lv_pretrained_fns
+            rs.append({})
+            for p in preps:
+                if tr_inputs_rgb[p] is None:
+                    print("... ERROR: data had no RGBD features for prep %s" % p)
+                    del bs[-1]
+                    del rs[-1]
+                    continue
 
-            if hyperparam[p]["rgbd_inp_trans"] is None:
-                intrans = return_input
-            elif hyperparam[p]["rgbd_inp_trans"] == 'tanh':
-                intrans = torch.tanh
-            elif hyperparam[p]["rgbd_inp_trans"] == 'sigmoid':
-                intrans = torch.sigmoid
-            else:
-                sys.exit("Unrecognized input transformation %s" % hyperparam[p]["in_trans"])
-
-            # Couple the RGB, D, L, V inputs to feed into the conv and FF networks.
-            # TODO: closely vet training procedure wrt randomization of input order.
-            tr_inputs = [[tr_inputs_rgb[p][idx], tr_inputs_d[p][idx], tr_inputs_l[p][idx], tr_inputs_v[p][idx]]
-                         for idx in range(len(tr_outputs[p]))]
-            te_inputs = [[te_inputs_rgb[p][idx], te_inputs_d[p][idx], te_inputs_l[p][idx], te_inputs_v[p][idx]]
-                         for idx in range(len(te_outputs[p]))]
-
-            # Train model.
-            if args.lv_pretrained_fns is not None:
-                print("... loading pretrained model weights for glove+resnet from '" + args.lv_pretrained_fns + "'...")
-            if random_restarts is None:
-                seeds = [None]
-            else:
-                seeds = random_restarts
-                rs[-1][p] = []
-            for seed in tqdm(seeds, desc="for '%s'" % p):
-                if seed is not None:
-                    # print("... %s with seed %d ..." % (p, seed))
-                    np.random.seed(seed)
-                    torch.manual_seed(seed)
-
-                # Instantiate convolutional RGBD fusion model and feed-forward L+V fusion model, then tie them together with a
-                # multi-model prediction model that predicts logits from their outputs.
-                rgbd_fusion_model = ConvFusionFFModel(dv, 4, 1, hyperparam[p]["hidden_dim"],
-                                                      hyperparam[p]["activation"]).to(dv)
-                lv_fusion_model = ShrinkingFusionFFModel(dv, len(tr_inputs[0][2]), len(tr_inputs[0][3]),
-                                                         hyperparam[p]["hidden_dim"], hyperparam[p]["dropout"],
-                                                         hyperparam[p]["activation"]).to(dv)
-
-                # Optionally load pre-trained weights for the L+V model component.
-                if args.lv_pretrained_fns is not None:
-                    lv_pretrained_fn = args.lv_pretrained_fns.split(',')[0] if p == 'on' else args.lv_pretrained_fns.split(',')[1]
-                    lv_fusion_model.load_state_dict(torch.load(lv_pretrained_fn))
-
-                model = MultiPredModel(dv, rgbd_fusion_model, lv_fusion_model,
-                                       hyperparam[p]["hidden_dim"], len(classes)).to(dv)
-
-                # Instantiate loss and optimizer.
-                # TODO: optimizer is a hyperparam to set.
-                loss_function = nn.CrossEntropyLoss()
-                if hyperparam[p]["opt"] == 'sgd':
-                    optimizer = optim.SGD(model.parameters(), lr=hyperparam[p]["learning_rate"])
-                elif hyperparam[p]["opt"] == 'adagrad':
-                    optimizer = optim.Adagrad(model.parameters(), lr=hyperparam[p]["learning_rate"])
-                elif hyperparam[p]["opt"] == 'adam':
-                    optimizer = optim.Adam(model.parameters(), lr=hyperparam[p]["learning_rate"])
-                elif hyperparam[p]["opt"] == 'rmsprop':
-                    optimizer = optim.RMSprop(model.parameters(), lr=hyperparam[p]["learning_rate"])
+                if hyperparam[p]["rgbd_inp_trans"] is None:
+                    intrans = return_input
+                elif hyperparam[p]["rgbd_inp_trans"] == 'tanh':
+                    intrans = torch.tanh
+                elif hyperparam[p]["rgbd_inp_trans"] == 'sigmoid':
+                    intrans = torch.sigmoid
                 else:
-                    raise ValueError('Unrecognized opt specification "' + hyperparam[p]["opt"] + '".')
+                    sys.exit("Unrecognized input transformation %s" % hyperparam[p]["in_trans"])
 
-                # Run training for specified number of epochs.
-                best_acc = best_cm = tr_acc_at_best = trcm_at_best = tloss_at_best = t_epochs = None
-                idxs = list(range(len(tr_inputs)))
-                np.random.shuffle(idxs)
-                tr_inputs = [tr_inputs[idx] for idx in idxs]
-                tro = tr_outputs[p][idxs, :]
-                result = None
-                last_saved_fn = None
-                for epoch in range(num_epochs):
-                    tloss = 0
-                    trcm = np.zeros(shape=(len(classes), len(classes)))
-                    tidx = 0
-                    batches_run = 0
-                    while tidx < len(tr_inputs):
-                        model.train()
-                        model.zero_grad()
-                        batch_in = [[torch.zeros((batch_size * num_trials, tr_inputs[0][0].shape[1],
-                                                 tr_inputs[0][0].shape[2], tr_inputs[0][0].shape[3])).to(dv),
-                                     torch.zeros((batch_size * num_trials, tr_inputs[0][1].shape[1],
-                                                  tr_inputs[0][1].shape[2], tr_inputs[0][1].shape[3])).to(dv)],
-                                    [torch.zeros((batch_size * num_trials, tr_inputs[0][2].shape[0])).to(dv),
-                                     torch.zeros((batch_size * num_trials, tr_inputs[0][3].shape[0])).to(dv)]]
-                        batch_gold = torch.zeros(batch_size * num_trials).to(dv)
-                        for bidx in range(batch_size):
-                            batch_in[0][0][bidx:bidx+num_trials, :, :, :] = intrans2(tr_inputs[tidx][0])
-                            batch_in[0][1][bidx:bidx+num_trials, :] = intrans(tr_inputs[tidx][1])
-                            # use the same L, V vector across all trials for this pair
-                            batch_in[1][0][bidx:bidx+num_trials, :] = tr_inputs[tidx][2].repeat(num_trials, 1)
-                            batch_in[1][1][bidx:bidx+num_trials, :] = tr_inputs[tidx][3].repeat(num_trials, 1)
-                            batch_gold[bidx:bidx+num_trials] = np.repeat(tro[tidx][0], num_trials)
+                # Couple the RGB, D, L, V inputs to feed into the conv and FF networks.
+                tr_inputs = [[tr_inputs_rgb[p][idx], tr_inputs_d[p][idx], tr_inputs_l[p][idx], tr_inputs_v[p][idx]]
+                             for idx in range(len(tr_outputs[p]))]
+                te_inputs = [[te_inputs_rgb[p][idx], te_inputs_d[p][idx], te_inputs_l[p][idx], te_inputs_v[p][idx]]
+                             for idx in range(len(te_outputs[p]))]
 
-                            tidx += 1
-                            if tidx == len(tr_inputs):
-                                break
-
-                        logits = model(batch_in)
-                        loss = loss_function(logits, batch_gold.long())
-                        tloss += loss.data.item()
-                        batches_run += 1
-
-                        loss.backward()
-                        optimizer.step()
-
-                        # Calculated per instance, not per pair (e.g., x5 examples, individual voting).
-                        for jdx in range(logits.shape[0]):
-                            trcm[int(batch_gold[jdx])][int(logits[jdx].argmax(0))] += 1
-
-                    tloss /= batches_run
-                    tr_acc = get_acc(trcm)
-
-                    with torch.no_grad():
-                        model.eval()
-                        cm = np.zeros(shape=(len(classes), len(classes)))
-                        for jdx in range(len(te_inputs)):
-
-                            te_in = [[torch.tensor(intrans2(te_inputs[jdx][0])).to(dv),
-                                      torch.tensor(intrans(te_inputs[jdx][1])).to(dv)],
-                                     [torch.tensor(te_inputs[jdx][2].repeat(num_trials, 1)).to(dv),
-                                      torch.tensor(te_inputs[jdx][3].repeat(num_trials, 1)).to(dv)]]
-                            trials_logits = model(te_in)  # will be full batch size wide
-                            v = np.zeros(len(classes))
-                            for tdx in range(num_trials):  # take a vote over trials (not whole logit size)
-                                v[int(trials_logits[tdx].argmax(0))] += 1
-                            
-                            if args.rgbd_m_as_disagreement:
-                                if v[1] == v[2] == 0:  # all votes are for class negative
-                                    cm[int(te_outputs[p][jdx])][0] += 1
-                                elif v[0] == v[1] == 0:  # all votes are for class positive
-                                    cm[int(te_outputs[p][jdx])][2] += 1
-                                else:  # votes are split among different classes, so conservatively vote maybe
-                                    cm[int(te_outputs[p][jdx])][1] += 1
-                            else:
-                                # If N/M/Y are all available, just use the majority vote across the trials
-                                # to decide the predicted label of the pair.
-                                cm[int(te_outputs[p][jdx])][int(v.argmax(0))] += 1
-
-                        acc = get_acc(cm)
-                        if best_acc is None or acc > best_acc:
-                            best_acc = acc
-                            best_cm = cm
-                            tr_acc_at_best = tr_acc
-                            trcm_at_best = trcm
-                            tloss_at_best = tloss
-                            t_epochs = epoch + 1  # record how many epochs of training have happened at this time
-
-                            # Save best-performing model at this seed
-                            if seed is not None:
-                                fn = os.path.join(args.outdir, "p-%s_m-rgbd+glove+resnet_tr-%s_te-%s_s-%s_acc-%.3f.pt" %
-                                    (p, args.train_objective, args.test_objective, seed, best_acc))
-                            else:
-                                fn = os.path.join(args.outdir, "p-%s_m-rgbd+glove+resnet_tr-%s_te-%s_acc-%.3f.pt" %
-                                    (p, args.train_objective, args.test_objective, best_acc))
-                            torch.save(model.state_dict(), fn)
-                            if last_saved_fn is not None:  # remove previous save
-                                os.system("rm %s" % last_saved_fn)
-                            last_saved_fn = fn
-
-                    result = best_acc, best_cm, tr_acc_at_best, trcm_at_best, tloss_at_best, t_epochs
-
-                if seed is None:
-                    rs[-1][p] = result
+                # Train model.
+                if lv_pretrained_fns is not None:
+                    print("... loading pretrained model weights for glove+resnet from '" + lv_pretrained_fns + "'...")
+                    if args.lv_pretrained_freeze == 1:
+                        print("...... and freezing pretrained layers")
+                if random_restarts is None:
+                    seeds = [None]
                 else:
-                    rs[-1][p].append(result)
+                    seeds = random_restarts
+                    rs[-1][p] = []
+                for seed in tqdm(seeds, desc="for '%s'" % p):
+                    if seed is not None:
+                        # print("... %s with seed %d ..." % (p, seed))
+                        np.random.seed(seed)
+                        torch.manual_seed(seed)
+
+                    # Instantiate convolutional RGBD fusion model and feed-forward L+V fusion model,
+                    # then tie them together with a multi-model prediction model that predicts
+                    # logits from their outputs.
+                    rgbd_fusion_model = ConvFusionFFModel(dv, 4, 1, hyperparam[p]["hidden_dim"],
+                                                          hyperparam[p]["activation"]).to(dv)
+                    lv_fusion_model = ShrinkingFusionFFModel(dv, len(tr_inputs[0][2]), len(tr_inputs[0][3]),
+                                                             hyperparam[p]["hidden_dim"], hyperparam[p]["dropout"],
+                                                             hyperparam[p]["activation"]).to(dv)
+
+                    # Optionally load pre-trained weights for the L+V model component.
+                    if lv_pretrained_fns is not None:
+                        lv_pretrained_fn = lv_pretrained_fns.split(',')[0] if p == 'on' \
+                            else lv_pretrained_fns.split(',')[1]
+                        lv_fusion_model.load_state_dict(torch.load(lv_pretrained_fn))
+
+                    model = MultiPredModel(dv, rgbd_fusion_model, lv_fusion_model,
+                                           hyperparam[p]["hidden_dim"], len(classes)).to(dv)
+
+                    # Instantiate loss and optimizer.
+                    loss_function = nn.CrossEntropyLoss()
+                    if hyperparam[p]["opt"] == 'sgd':
+                        optimizer = optim.SGD(model.parameters(), lr=hyperparam[p]["rgbd_learning_rate"])
+                    elif hyperparam[p]["opt"] == 'adagrad':
+                        optimizer = optim.Adagrad(model.parameters(), lr=hyperparam[p]["rgbd_learning_rate"])
+                    elif hyperparam[p]["opt"] == 'adam':
+                        optimizer = optim.Adam(model.parameters(), lr=hyperparam[p]["rgbd_learning_rate"])
+                    elif hyperparam[p]["opt"] == 'rmsprop':
+                        optimizer = optim.RMSprop(model.parameters(), lr=hyperparam[p]["rgbd_learning_rate"])
+                    else:
+                        raise ValueError('Unrecognized opt specification "' + hyperparam[p]["opt"] + '".')
+
+                    # Freeze weights.
+                    if lv_pretrained_fns is not None and args.lv_pretrained_freeze == 1:
+                        for param in lv_fusion_model.parameters():
+                            param.requires_grad = False
+
+                    # Run training for specified number of epochs.
+                    best_acc = best_cm = tr_acc_at_best = trcm_at_best = tloss_at_best = t_epochs = None
+                    idxs = list(range(len(tr_inputs)))
+                    np.random.shuffle(idxs)
+                    tr_inputs = [tr_inputs[idx] for idx in idxs]
+                    tro = tr_outputs[p][idxs, :]
+                    result = None
+                    last_saved_fn = None
+                    for epoch in range(num_epochs):
+                        tloss = 0
+                        trcm = np.zeros(shape=(len(classes), len(classes)))
+                        tidx = 0
+                        batches_run = 0
+                        while tidx < len(tr_inputs):
+                            model.train()
+                            model.zero_grad()
+                            batch_in = [[torch.zeros((batch_size * num_trials, tr_inputs[0][0].shape[1],
+                                                     tr_inputs[0][0].shape[2], tr_inputs[0][0].shape[3])).to(dv),
+                                         torch.zeros((batch_size * num_trials, tr_inputs[0][1].shape[1],
+                                                      tr_inputs[0][1].shape[2], tr_inputs[0][1].shape[3])).to(dv)],
+                                        [torch.zeros((batch_size * num_trials, tr_inputs[0][2].shape[0])).to(dv),
+                                         torch.zeros((batch_size * num_trials, tr_inputs[0][3].shape[0])).to(dv)]]
+                            batch_gold = torch.zeros(batch_size * num_trials).to(dv)
+                            for bidx in range(batch_size):
+                                batch_in[0][0][bidx:bidx+num_trials, :, :, :] = tr_inputs[tidx][0]
+                                batch_in[0][1][bidx:bidx+num_trials, :] = intrans(tr_inputs[tidx][1])
+                                # use the same L, V vector across all trials for this pair
+                                batch_in[1][0][bidx:bidx+num_trials, :] = tr_inputs[tidx][2].repeat(num_trials, 1)
+                                batch_in[1][1][bidx:bidx+num_trials, :] = tr_inputs[tidx][3].repeat(num_trials, 1)
+                                batch_gold[bidx:bidx+num_trials] = np.repeat(tro[tidx][0], num_trials)
+
+                                tidx += 1
+                                if tidx == len(tr_inputs):
+                                    break
+
+                            logits = model(batch_in)
+                            loss = loss_function(logits, batch_gold.long())
+                            tloss += loss.data.item()
+                            batches_run += 1
+
+                            loss.backward()
+                            optimizer.step()
+
+                            # Calculated per instance, not per pair (e.g., x5 examples, individual voting).
+                            for jdx in range(logits.shape[0]):
+                                trcm[int(batch_gold[jdx])][int(logits[jdx].argmax(0))] += 1
+
+                        tloss /= batches_run
+                        tr_acc = get_acc(trcm)
+
+                        with torch.no_grad():
+                            model.eval()
+                            cm = np.zeros(shape=(len(classes), len(classes)))
+                            for jdx in range(len(te_inputs)):
+
+                                te_in = [[torch.tensor(te_inputs[jdx][0]).to(dv),
+                                          torch.tensor(intrans(te_inputs[jdx][1])).to(dv)],
+                                         [torch.tensor(te_inputs[jdx][2].repeat(num_trials, 1)).to(dv),
+                                          torch.tensor(te_inputs[jdx][3].repeat(num_trials, 1)).to(dv)]]
+                                trials_logits = model(te_in)  # will be full batch size wide
+                                v = np.zeros(len(classes))
+                                for tdx in range(num_trials):  # take a vote over trials (not whole logit size)
+                                    v[int(trials_logits[tdx].argmax(0))] += 1
+
+                                if args.rgbd_m_as_disagreement:
+                                    if v[1] == v[2] == 0:  # all votes are for class negative
+                                        cm[int(te_outputs[p][jdx])][0] += 1
+                                    elif v[0] == v[1] == 0:  # all votes are for class positive
+                                        cm[int(te_outputs[p][jdx])][2] += 1
+                                    else:  # votes are split among different classes, so conservatively vote maybe
+                                        cm[int(te_outputs[p][jdx])][1] += 1
+                                else:
+                                    # If N/M/Y are all available, just use the majority vote across the trials
+                                    # to decide the predicted label of the pair.
+                                    cm[int(te_outputs[p][jdx])][int(v.argmax(0))] += 1
+
+                            acc = get_acc(cm)
+                            if best_acc is None or acc > best_acc:
+                                best_acc = acc
+                                best_cm = cm
+                                tr_acc_at_best = tr_acc
+                                trcm_at_best = trcm
+                                tloss_at_best = tloss
+                                t_epochs = epoch + 1  # record how many epochs of training have happened at this time
+
+                                # Save best-performing model at this seed
+                                if seed is not None:
+                                    fn = os.path.join(args.outdir,
+                                                      "p-%s_m-rgbd+glove+resnet_tr-%s_te-%s_s-%s_acc-%.3f.pt" %
+                                                      (p, args.train_objective, args.test_objective, seed, best_acc))
+                                else:
+                                    fn = os.path.join(args.outdir, "p-%s_m-rgbd+glove+resnet_tr-%s_te-%s_acc-%.3f.pt" %
+                                                      (p, args.train_objective, args.test_objective, best_acc))
+                                torch.save(model.state_dict(), fn)
+                                if last_saved_fn is not None:  # remove previous save
+                                    os.system("rm %s" % last_saved_fn)
+                                last_saved_fn = fn
+
+                        result = best_acc, best_cm, tr_acc_at_best, trcm_at_best, tloss_at_best, t_epochs
+
+                    if seed is None:
+                        rs[-1][p] = result
+                    else:
+                        rs[-1][p].append(result)
         print("... done")
 
     if random_restarts is None:
@@ -629,8 +655,10 @@ if __name__ == "__main__":
                         help="either 'mturk' or 'robo'")
     parser.add_argument('--outdir', type=str, required=True,
                         help="directory to save trained model state_dicts to")
-    parser.add_argument('--lv_pretrained_fns', type=str, required=False,
-                        help="pretrained state dict files for a L+V model to use with rgbd+glove+resent (on,in)")
+    parser.add_argument('--lv_pretrained_dir', type=str, required=False,
+                        help="pretrained state dict dir for a L+V model to use with rgbd+glove+resent (on,in)")
+    parser.add_argument('--lv_pretrained_freeze', type=int, required=False,
+                        help="whether to freeze pretrained layers")
     parser.add_argument('--rgbd_m_as_disagreement', type=int, required=False,
                         help=("if true, treat the M label as an inference-time-only classification that happens" +
                               " when votes are split between Y/N on the trials available for a pair; at training time," +
