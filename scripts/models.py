@@ -378,7 +378,6 @@ class ConvFusionFFModel(nn.Module):
 
 # Serires of 3 convolutions + max pools followed by a fully connected layer to shrink
 # a multi-channel, 2d input into a single linear representation.
-# TODO: try dropout
 class ConvToLinearModel(nn.Module):
 
     def __init__(self, dv, channels, hidden_dim, activation):

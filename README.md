@@ -38,7 +38,7 @@ In both cases, note that I'm naming the output for the `dev` set. If the optiona
 
 Okay, finally, now that we have all our vector inputs/outputs prepped, we can run models with:
 
-`> python run_rss_models.py --models glove,resnet,rgbd,mc --outdir trained_models/ --input ../data/torch_ready/rgbd_only_dev --train_objective mturk --test_objective robo`
+`> python run_rss_models.py --models glove,resnet,rgbd,mc --outdir trained_models/ --input ../data/torch_ready/rgbd_only_dev --train_objective robo --test_objective robo`
 
 or, for all data but no RGBD model, 
 
