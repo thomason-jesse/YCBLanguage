@@ -376,16 +376,94 @@ on
     RGBD+   .369
 ---
 
-Feb 10-17:
-- (R) First pass at RW.
-- (R) First pass Experiments & Results and Conclusion.
-- (J) Pass over written Intro, Task&Data.
-- (R) Finish initial draft of paper.
 Feb 18-22:
+- (R) First pass at RW.
+- (R) Finish initial draft of paper.
+- (J) Pass over Results
+- (J) Pass over Conclusion.
 - (R) YCB 5 images per object for V inputs.
 - (J) Final dev/train model numbers for paper with full V input.
 - (J/Y) Decide content for analysis section.
 - (R) Figure content for analysis section.
 - (J/Y) Refine paper draft so it's ready to shop around.
-Feb 25-March 1:
+Feb 23-March 1:
 - Shop paper around + make edits and exp changes based on suggestions.
+
+
+---
+
+--random_restarts 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30
+
+---
+
+all_test train/test mturk
+
+ Majority Class:
+  in:   acc 0.605+/-0.000       (train: 0.610+/-0.000)
+        f1  0.687+/-0.000       (train: 0.678+/-0.000)
+        train loss 0.000+/-0.000
+        train epochs 1.000+/-0.000
+  on:   acc 0.540+/-0.000       (train: 0.386+/-0.000)
+        f1  0.630+/-0.000       (train: 0.474+/-0.000)
+        train loss 0.000+/-0.000
+        train epochs 1.000+/-0.000
+ Oracle Majority Class:
+  in:   acc 0.605+/-0.000       (train: 0.605+/-0.000)
+        f1  0.687+/-0.000       (train: 0.687+/-0.000)
+        train loss 0.000+/-0.000
+        train epochs 1.000+/-0.000
+        Majority Class p-value 1.000
+  on:   acc 0.540+/-0.000       (train: 0.540+/-0.000)
+        f1  0.630+/-0.000       (train: 0.630+/-0.000)
+        train loss 0.000+/-0.000
+        train epochs 1.000+/-0.000
+        Majority Class p-value 1.000
+ GloVe FF:
+  in:   acc 0.657+/-0.018       (train: 0.764+/-0.038)
+        f1  0.738+/-0.019       (train: 0.844+/-0.032)
+        train loss 0.585+/-0.090
+        train epochs 8.933+/-7.754
+        Majority Class p-value 0.000
+        Oracle Majority Class p-value 0.000
+  on:   acc 0.598+/-0.017       (train: 0.694+/-0.046)
+        f1  0.651+/-0.016       (train: 0.737+/-0.045)
+        train loss 0.691+/-0.080
+        train epochs 4.167+/-5.961
+        Majority Class p-value 0.000
+        Oracle Majority Class p-value 0.000
+ ResNet FF:
+  in:   acc 0.623+/-0.022       (train: 0.711+/-0.048)
+        f1  0.704+/-0.025       (train: 0.796+/-0.047)
+        train loss 0.917+/-0.415
+        train epochs 8.233+/-8.781
+        Majority Class p-value 0.000
+        Oracle Majority Class p-value 0.000
+        GloVe FF p-value 0.000
+  on:   acc 0.570+/-0.013       (train: 0.743+/-0.046)
+        f1  0.627+/-0.017       (train: 0.779+/-0.046)
+        train loss 0.588+/-0.081
+        train epochs 17.800+/-8.592
+        Majority Class p-value 0.000
+        Oracle Majority Class p-value 0.000
+        GloVe FF p-value 0.000
+ GloVe+ResNet FF:
+  in:   acc 0.630+/-0.021       (train: 0.707+/-0.057)
+        f1  0.708+/-0.024       (train: 0.789+/-0.054)
+        train loss 2.950+/-3.675
+        train epochs 12.300+/-7.879
+        Majority Class p-value 0.000
+        Oracle Majority Class p-value 0.000
+        GloVe FF p-value 0.000
+        ResNet FF p-value 0.205
+  on:   acc 0.601+/-0.017       (train: 0.755+/-0.051)
+        f1  0.650+/-0.016       (train: 0.789+/-0.051)
+        train loss 0.559+/-0.103
+        train epochs 8.367+/-6.442
+        Majority Class p-value 0.000
+        Oracle Majority Class p-value 0.000
+        GloVe FF p-value 0.564
+        ResNet FF p-value 0.000
+
+---
+
+rgbd_only_test train/test robo
