@@ -58,11 +58,13 @@ def main(args, dv):
     # Read in torch-ready input data.
     print("Reading in torch-ready lists from json and converting them to tensors...")
     tr_outputs = {}
+    tr_names = {}
     tr_inputs_l = {}
     tr_inputs_v = {}
     tr_inputs_rgb = {}
     tr_inputs_d = {}
     te_outputs = {}
+    te_names = {}
     te_inputs_l = {}
     te_inputs_v = {}
     te_inputs_rgb = {}
@@ -87,6 +89,7 @@ def main(args, dv):
 
             tr_outputs[p] = torch.tensor(keep_all_but(d["train"][train_label], d["train"][train_label], [-1]),
                                          dtype=torch.float).to(dv)
+            tr_names[p] = keep_all_but(d["train"]["names"], d["train"][train_label], [-1])
             tr_inputs_l[p] = torch.tensor(keep_all_but(d["train"]["lang"], d["train"][train_label], [-1]),
                                           dtype=torch.float).to(dv)
             tr_inputs_v[p] = torch.tensor(keep_all_but(d["train"]["vis"], d["train"][train_label], [-1]),
@@ -97,6 +100,7 @@ def main(args, dv):
                                           dtype=torch.float).to(dv) if d["train"]["d"] is not None else None
             te_outputs[p] = torch.tensor(keep_all_but(d["test"][test_label], d["test"][test_label], [-1]),
                                          dtype=torch.float).to(dv)
+            te_names[p] = keep_all_but(d["test"]["names"], d["test"][test_label], [-1])
             te_inputs_l[p] = torch.tensor(keep_all_but(d["test"]["lang"], d["test"][test_label], [-1]),
                                           dtype=torch.float).to(dv)
             te_inputs_v[p] = torch.tensor(keep_all_but(d["test"]["vis"], d["test"][test_label], [-1]),
@@ -207,7 +211,7 @@ def main(args, dv):
                     raise ValueError('Unrecognized opt specification "' + hyperparam[p]["opt"] + '".')
 
                 # Run training for specified number of epochs.
-                best_acc = best_cm = tr_acc_at_best = trcm_at_best = tloss_at_best = t_epochs = None
+                best_acc = best_cm = tr_acc_at_best = trcm_at_best = tloss_at_best = t_epochs = predictions = None
                 idxs = list(range(len(tr_inputs)))
                 np.random.shuffle(idxs)
                 tr_inputs = [tr_inputs[idx] for idx in idxs]
@@ -254,6 +258,7 @@ def main(args, dv):
                     with torch.no_grad():
                         model.eval()
                         cm = np.zeros(shape=(len(classes), len(classes)))
+                        curr_predictions = {}  # map from pair -> label
                         for jdx in range(len(te_inputs)):
                             trials_logits = model([te_inputs[jdx][0], intrans(te_inputs[jdx][1])])
                             v = np.zeros(len(classes))
@@ -262,15 +267,18 @@ def main(args, dv):
                             
                             if args.rgbd_m_as_disagreement:
                                 if v[1] == v[2] == 0:  # all votes are for class negative
-                                    cm[int(te_outputs[p][jdx])][0] += 1
+                                    chosen_class = 0
                                 elif v[0] == v[1] == 0:  # all votes are for class positive
-                                    cm[int(te_outputs[p][jdx])][2] += 1
+                                    chosen_class = 2
                                 else:  # votes are split among different classes, so conservatively vote maybe
-                                    cm[int(te_outputs[p][jdx])][1] += 1
+                                    chosen_class = 1
                             else:
                                 # If N/M/Y are all available, just use the majority vote across the trials
                                 # to decide the predicted label of the pair.
-                                cm[int(te_outputs[p][jdx])][int(v.argmax(0))] += 1
+                                chosen_class = int(v.argmax(0))
+
+                            cm[int(te_outputs[p][jdx])][chosen_class] += 1
+                            curr_predictions["(%s, %s)" % (te_names[p][jdx][0], te_names[p][jdx][1])] = chosen_class
 
                         acc = get_acc(cm)
                         if best_acc is None or acc > best_acc:
@@ -280,6 +288,7 @@ def main(args, dv):
                             trcm_at_best = trcm
                             tloss_at_best = tloss
                             t_epochs = epoch + 1  # record how many epochs of training have happened at this time
+                            predictions = curr_predictions  # record pair -> class predictions for at best epoch.
 
                             # Save best-performing model at this seed
                             if seed is not None:
@@ -293,7 +302,7 @@ def main(args, dv):
                                 os.system("rm %s" % last_saved_fn)
                             last_saved_fn = fn
 
-                    result = best_acc, best_cm, tr_acc_at_best, trcm_at_best, tloss_at_best, t_epochs
+                    result = best_acc, best_cm, tr_acc_at_best, trcm_at_best, tloss_at_best, t_epochs, predictions
 
                 if seed is None:
                     rs[-1][p] = result
@@ -396,7 +405,7 @@ def main(args, dv):
     if 'rgbd+glove+resnet' in models:
 
         # Load all possible pretraining parameters from give  dir.
-        lv_pretrained_fns_settings = [None]  # DEBUG
+        lv_pretrained_fns_settings = [None]
         if args.lv_pretrained_dir is not None:
             in_fns = []
             on_fns = []
@@ -491,7 +500,7 @@ def main(args, dv):
                             param.requires_grad = False
 
                     # Run training for specified number of epochs.
-                    best_acc = best_cm = tr_acc_at_best = trcm_at_best = tloss_at_best = t_epochs = None
+                    best_acc = best_cm = tr_acc_at_best = trcm_at_best = tloss_at_best = t_epochs = predictions = None
                     idxs = list(range(len(tr_inputs)))
                     np.random.shuffle(idxs)
                     tr_inputs = [tr_inputs[idx] for idx in idxs]
@@ -543,6 +552,7 @@ def main(args, dv):
                         with torch.no_grad():
                             model.eval()
                             cm = np.zeros(shape=(len(classes), len(classes)))
+                            curr_predictions = {}
                             for jdx in range(len(te_inputs)):
 
                                 te_in = [[torch.tensor(te_inputs[jdx][0]).to(dv),
@@ -556,15 +566,18 @@ def main(args, dv):
 
                                 if args.rgbd_m_as_disagreement:
                                     if v[1] == v[2] == 0:  # all votes are for class negative
-                                        cm[int(te_outputs[p][jdx])][0] += 1
+                                        chosen_class = 0
                                     elif v[0] == v[1] == 0:  # all votes are for class positive
-                                        cm[int(te_outputs[p][jdx])][2] += 1
+                                        chosen_class = 2
                                     else:  # votes are split among different classes, so conservatively vote maybe
-                                        cm[int(te_outputs[p][jdx])][1] += 1
+                                        chosen_class = 1
                                 else:
                                     # If N/M/Y are all available, just use the majority vote across the trials
                                     # to decide the predicted label of the pair.
-                                    cm[int(te_outputs[p][jdx])][int(v.argmax(0))] += 1
+                                    chosen_class = int(v.argmax(0))
+
+                                cm[int(te_outputs[p][jdx])][chosen_class] += 1
+                                curr_predictions["(%s, %s)" % (te_names[p][jdx][0], te_names[p][jdx][1])] = chosen_class
 
                             acc = get_acc(cm)
                             if best_acc is None or acc > best_acc:
@@ -574,6 +587,7 @@ def main(args, dv):
                                 trcm_at_best = trcm
                                 tloss_at_best = tloss
                                 t_epochs = epoch + 1  # record how many epochs of training have happened at this time
+                                predictions = curr_predictions
 
                                 # Save best-performing model at this seed
                                 if seed is not None:
@@ -588,7 +602,7 @@ def main(args, dv):
                                     os.system("rm %s" % last_saved_fn)
                                 last_saved_fn = fn
 
-                        result = best_acc, best_cm, tr_acc_at_best, trcm_at_best, tloss_at_best, t_epochs
+                        result = best_acc, best_cm, tr_acc_at_best, trcm_at_best, tloss_at_best, t_epochs, predictions
 
                     if seed is None:
                         rs[-1][p] = result
@@ -641,6 +655,24 @@ def main(args, dv):
                                       equal_var=False)  # TODO: could maybe relax this to true for non-MC.
                     print("  \t%s p-value %.3f" % (bs[jdx], pv))
 
+        # Write predictions outfile.
+        if args.predictions_outfile is not None:
+            print("Writing predictions to '%s'..." % args.predictions_outfile)
+            with open(args.predictions_outfile, 'w') as f:
+                d = {}
+                for p in preps:
+                    d[p] = {"model": [], "accuracy": [], "predictions": []}
+                    for idx in range(len(bs)):
+                        for jdx in range(len(random_restarts)):
+                            mn = bs[idx] + "_s-" + str(random_restarts[jdx])
+                            ma = rs[idx][p][jdx][0]
+                            mp = rs[idx][p][jdx][6]
+                            d[p]["model"].append(mn)
+                            d[p]["accuracy"].append(ma)
+                            d[p]["predictions"].append(mp)
+                json.dump(d, f)
+            print("... done")
+
 
 if __name__ == "__main__":
 
@@ -667,5 +699,7 @@ if __name__ == "__main__":
                         help="verbosity level")
     parser.add_argument('--random_restarts', type=str, required=False,
                         help="comma-separated list of random seeds to use; presents avg + stddev data instead of cms")
+    parser.add_argument('--predictions_outfile', type=str, required=False,
+                        help="file to dump prediction JSON across models")
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     main(parser.parse_args(), device)

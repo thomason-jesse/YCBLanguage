@@ -34,7 +34,7 @@ def run_majority_class(tr_l, te_l, num_classes):
             conmat[l][mc] += 1
 
     # Return accuracy and cm.
-    return get_acc(cm), cm, get_acc(trcm), trcm, 0, 1
+    return get_acc(cm), cm, get_acc(trcm), trcm, 0, 1, {}
 
 
 # A naive bayes implementation that assumes known categorical feature values.
@@ -266,7 +266,8 @@ def run_ff_model(dv, outdir, model_desc,
     if verbose:
         print("FF: ... done")
 
-    return best_acc, best_cm, tr_acc_at_best, trcm_at_best, tloss_at_best, t_epochs
+    # TODO: calculate and store predictions for analysis.
+    return best_acc, best_cm, tr_acc_at_best, trcm_at_best, tloss_at_best, t_epochs, {}
 
 
 # Predicts output layer from two model outputs.

@@ -80,6 +80,8 @@ def main(args):
                   (len(available_train[p]), len(train[p]["ob1"]), len(available_test[p]), len(test[p]["ob1"]), p))
     tr_o = {p: [train[p]["label"][ix] for ix, _, _ in available_train[p]] for p in preps}
     te_o = {p: [test[p]["label"][ix] for ix, _, _ in available_test[p]] for p in preps}
+    tr_names = {p: [(names[ob1], names[ob2]) for _, ob1, ob2 in available_train[p]] for p in preps}
+    te_names = {p: [(names[ob1], names[ob2]) for _, ob1, ob2 in available_test[p]] for p in preps}
 
     # Read in robot execution ground truth labels from annotation CSVs.
     tr_robo_o = {p: [-1 for ix, _, _ in available_train[p]] for p in preps}
@@ -343,6 +345,7 @@ def main(args):
                  {"mturk_label": tr_outputs.tolist(),
                   "robo_label": tr_robo_outputs.tolist(),
                   "human_label": tr_human_outputs.tolist(),
+                  "names": tr_names[p],
                   "lang": tr_inputs_l.tolist(),
                   "vis": tr_inputs_v.tolist(),
                   "rgb": tr_inputs_rgb.tolist() if tr_inputs_rgb is not None else None,
@@ -351,6 +354,7 @@ def main(args):
                  {"mturk_label": te_outputs.tolist(),
                   "robo_label": te_robo_outputs.tolist(),
                   "human_label": te_human_outputs.tolist(),
+                  "names": te_names[p],
                   "lang": te_inputs_l.tolist(),
                   "vis": te_inputs_v.tolist(),
                   "rgb": te_inputs_rgb.tolist() if te_inputs_rgb is not None else None,
