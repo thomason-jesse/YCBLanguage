@@ -57,25 +57,36 @@ def main(args):
     print("Selecting evaluation data...")
     available_train = {p: None for p in preps}
     available_test = {p: None for p in preps}
+    # Class cup mergers equate f_cups and e_cups (two medium-most cups), so blacklist f_cups from the training set since
+    # e_cups appears in the test set.
+    blacklist = ['065-f_cups']
     for p in preps:
         if args.rgbd_only:
             available_train[p] = [[ix, train[p]["ob1"][ix], train[p]["ob2"][ix]]
                                   for ix in range(len(train[p]["ob1"]))
-                                  if str(train[p]["ob1"][ix]) in rgbd_tr and
+                                  if names[train[p]["ob1"][ix]] not in blacklist and
+                                  names[train[p]["ob2"][ix]] not in blacklist and
+                                  str(train[p]["ob1"][ix]) in rgbd_tr and
                                   str(train[p]["ob2"][ix]) in rgbd_tr[str(train[p]["ob1"][ix])] and
                                   len(rgbd_tr[str(train[p]["ob1"][ix])][str(train[p]["ob2"][ix])][0]) == num_expected_trials]
             available_test[p] = [[ix, test[p]["ob1"][ix], test[p]["ob2"][ix]]
                                  for ix in range(len(test[p]["ob1"]))
-                                 if str(test[p]["ob1"][ix]) in rgbd_te and
+                                 if names[test[p]["ob1"][ix]] not in blacklist and
+                                 names[test[p]["ob2"][ix]] not in blacklist and
+                                 str(test[p]["ob1"][ix]) in rgbd_te and
                                  str(test[p]["ob2"][ix]) in rgbd_te[str(test[p]["ob1"][ix])] and
-                                  len(rgbd_te[str(test[p]["ob1"][ix])][str(test[p]["ob2"][ix])][0]) == num_expected_trials]
+                                 len(rgbd_te[str(test[p]["ob1"][ix])][str(test[p]["ob2"][ix])][0]) == num_expected_trials]
             print("... done; %d / %d available training and %d / %d available testing examples with RGBD data for %s" %
                   (len(available_train[p]), len(train[p]["ob1"]), len(available_test[p]), len(test[p]["ob1"]), p))
         else:
             available_train[p] = [[ix, train[p]["ob1"][ix], train[p]["ob2"][ix]]
-                                  for ix in range(len(train[p]["ob1"]))]
+                                  for ix in range(len(train[p]["ob1"]))
+                                  if names[train[p]["ob1"][ix]] not in blacklist and
+                                  names[train[p]["ob2"][ix]] not in blacklist]
             available_test[p] = [[ix, test[p]["ob1"][ix], test[p]["ob2"][ix]]
-                                 for ix in range(len(test[p]["ob1"]))]
+                                 for ix in range(len(test[p]["ob1"]))
+                                 if names[test[p]["ob1"][ix]] not in blacklist and
+                                 names[test[p]["ob2"][ix]] not in blacklist]
             print("... done; %d / %d available training and %d / %d available testing examples for %s" %
                   (len(available_train[p]), len(train[p]["ob1"]), len(available_test[p]), len(test[p]["ob1"]), p))
     tr_o = {p: [train[p]["label"][ix] for ix, _, _ in available_train[p]] for p in preps}
@@ -227,7 +238,12 @@ def main(args):
     tt = ToTensor()
     v_width = None
     for idx in range(len(names)):
-        img_fns = imgs[idx] if type(imgs[idx]) is list else [imgs[idx]]
+        img_fns = []
+        img_dir = imgs[idx].replace(".jpeg", "")  # previously this stored a single image; now it points to a directory
+        for _, _, fns in os.walk(img_dir):  # extract all five veiwpoints from image directory
+            for fn in fns:
+                if fn.split('.')[-1] == 'jpg':
+                    img_fns.append(os.path.join(img_dir, fn))
         for img_fn in img_fns:
             ffn = img_fn + '.resnet'
             if os.path.isfile(ffn):
@@ -239,7 +255,7 @@ def main(args):
                         ob_to_vs[names[idx]] = []
                     ob_to_vs[names[idx]].append(v)
             else:
-                pil = Image.open(imgs[idx])
+                pil = Image.open(img_fn)
                 pil = resize(pil, (224, 244))
                 im = tt(pil)
                 im = normalize(im)

@@ -86,6 +86,16 @@ def main(args, dv):
                 d["train"][train_label] = [[2] if v[0] > 1 else [0] for v in d["train"][train_label]]
                 print("... for %s training data, rounded %d Maybe labels down to No values" %
                       (p, cmtr))
+            if args.round_m_to_n == 1:
+                # WARNING: makes labels 0 -> N, 1 -> Y, unlike triple label scheme!
+                cmtr = d["train"][train_label].count([1])
+                d["train"][train_label] = [[1] if v[0] > 1 else [0] for v in d["train"][train_label]]
+                print("... for %s training data, rounded %d Maybe labels down to No values" %
+                      (p, cmtr))
+                cmte = d["test"][test_label].count([1])
+                d["test"][test_label] = [[1] if v[0] > 1 else [0] for v in d["test"][test_label]]
+                print("... for %s testing data, rounded %d Maybe labels down to No values" %
+                      (p, cmte))
 
             tr_outputs[p] = torch.tensor(keep_all_but(d["train"][train_label], d["train"][train_label], [-1]),
                                          dtype=torch.float).to(dv)
@@ -695,6 +705,8 @@ if __name__ == "__main__":
                         help=("if true, treat the M label as an inference-time-only classification that happens" +
                               " when votes are split between Y/N on the trials available for a pair; at training time," +
                               " the M labels are rounded down to N."))
+    parser.add_argument('--round_m_to_n', type=int, required=False,
+                        help="if true, round all M labels down to N at train and test time")
     parser.add_argument('--verbose', type=int, required=False, default=0,
                         help="verbosity level")
     parser.add_argument('--random_restarts', type=str, required=False,

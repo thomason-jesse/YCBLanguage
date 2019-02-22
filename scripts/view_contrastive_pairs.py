@@ -44,7 +44,9 @@ def main(args, dv):
         fn = args.torch_infile + '.' + p
         with open(fn, 'r') as f:
             d = json.load(f)
-            gold_labels = {'(%s, %s)' % (d["test"]["names"][idx][0], d["test"]["names"][idx][1]): d["test"]["robo_label"][idx][0]
+            gold_labels = {'(%s, %s)' % (d["test"]["names"][idx][0], d["test"]["names"][idx][1]):
+                            (0 if d["test"]["robo_label"][idx][0] < 2 else 1)
+                            if args.round_m_to_n == 1 else d["test"]["robo_label"][idx][0]
                            for idx in range(len(d["test"]["names"]))}
 
         # Take votes of model decisions across seeds to get "typical" model responses.
@@ -57,6 +59,8 @@ def main(args, dv):
                                                 if preds[p]["model"][midx].find('/') > 0
                                                 else len(preds[p]["model"][midx]))]
             if base not in vote_predictions:
+                if len(preds[p]["predictions"][midx]) == 0:
+                    continue  # no predictions saved for this model (MC, OMC)
                 vote_predictions[base] = {pair: [] for pair in preds[p]["predictions"][midx]}
                 accs[base] = []
                 model_names[base] = []
@@ -129,5 +133,7 @@ if __name__ == "__main__":
                         help="threshold of confidence to keep a pair for a model")
     parser.add_argument('--use_highest_acc', required=False, action='store_true',
                         help="whether to consider only the model with the highest accuracy")
+    parser.add_argument('--round_m_to_n', type=int, required=False,
+                        help="if true, round gold labels of M to N")
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     main(parser.parse_args(), device)

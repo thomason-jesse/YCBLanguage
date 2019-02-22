@@ -7,6 +7,7 @@ import os
 import matplotlib.pyplot as plt
 from matplotlib import colors
 import numpy as np
+import sys
 from extract_robot_features import read_robo_dir, robo_data_ob_name_converter
 from tqdm import tqdm
 
@@ -20,6 +21,7 @@ def main(args):
     # Read in object pairs line by line.
     print("Writing RGB final trial images to dir for every pair in input CSV...")
     not_found = []
+    com = {0: 2, 1: 1, 2: 0}  # R->B, G->G, B->R
     with open(args.infile, 'r') as f:
         for (idx, line) in tqdm(enumerate(f.readlines())):
             if idx == 0:  # header
@@ -40,23 +42,53 @@ def main(args):
                     if not os.path.isdir(kdir):
                         os.system("mkdir " + kdir)
                     for trial in d[dk]:
-                        im = np.asarray(d[dk][trial]['t1_rgbmap'])
-                        im /= np.max(im)
-                        fn = os.path.join(kdir, "%d.png" % int(trial))
+                        im_rgb = np.asarray(d[dk][trial]['t1_rgbmap'], dtype=float)
+                        im_d = np.asarray(d[dk][trial]['t1_depthmap'], dtype=float)
+                        if im_rgb.shape[0] == 3:
+                            cdim = 0
+                            xdim = 1
+                            ydim = 2
+                        elif im_rgb.shape[2] == 3:
+                            cdim = 2
+                            xdim = 0
+                            ydim = 1
+                        else:
+                            sys.exit("Unrecognized RGB shape " + str(im_rgb.shape))
+                        im_rgb /= np.max(im_rgb) if cdim == 0 else 255.
+                        im_d /= np.max(im_d)
+                        fn_rgb = os.path.join(kdir, "%d.rgb.png" % int(trial))
+                        fn_d = os.path.join(kdir, "%d.d.png" % int(trial))
                         cmap = colors.ListedColormap([[(cidx + 1) / float(grade) for _ in range(3)]
                                                       for cidx in range(grade)])
                         bounds = range(grade)
                         norm = colors.BoundaryNorm(bounds, cmap.N)
+
                         fig, ax = plt.subplots()
-                        pltim = [[[int(im[cidx, xidx, yidx] * grade) for cidx in range(3)]
-                                  for yidx in range(im.shape[2])]
-                                 for xidx in range(im.shape[1])]
+                        pltim = [[[int((im_rgb[cidx, xidx, yidx] if cdim == 0 else im_rgb[xidx, yidx, com[cidx]])
+                                       * grade)
+                                   for cidx in range(3)]
+                                  for yidx in range(im_rgb.shape[ydim])]
+                                 for xidx in range(im_rgb.shape[xdim])]
                         ax.imshow(pltim, cmap=cmap, norm=norm)
                         for spine in plt.gca().spines.values():
                             spine.set_visible(False)
                         plt.tick_params(top='off', bottom='off', left='off', right='off', labelleft='off',
                                         labelbottom='off', labeltop='off')
-                        plt.savefig(fn, bbox_inches='tight')
+                        plt.savefig(fn_rgb, bbox_inches='tight')
+                        plt.close(fig)
+
+                        fig, ax = plt.subplots()
+                        pltim = [[[int((im_d[xidx, yidx] if cdim == 0 else im_d[xidx, yidx])
+                                       * grade)
+                                   for _ in range(3)]
+                                  for yidx in range(im_d.shape[1])]
+                                 for xidx in range(im_d.shape[0])]
+                        ax.imshow(pltim, cmap=cmap, norm=norm)
+                        for spine in plt.gca().spines.values():
+                            spine.set_visible(False)
+                        plt.tick_params(top='off', bottom='off', left='off', right='off', labelleft='off',
+                                        labelbottom='off', labeltop='off')
+                        plt.savefig(fn_d, bbox_inches='tight')
                         plt.close(fig)
             if not found:
                 not_found.append(k)

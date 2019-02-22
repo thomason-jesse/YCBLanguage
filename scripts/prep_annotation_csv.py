@@ -83,7 +83,7 @@ def main(args):
                 len(available_all_test[p]), len(test[p]["ob1"]), p))
     
     out_fn = args.out_fn
-    print("... writing tensors as numpy jsons to '" + out_fn + "' for " + p)
+    print("... writing CSVs to '" + out_fn + "'")
     with open(out_fn, 'w') as f:
         headers = ["fold", "a", "b", "has_in_rgbd", "has_on_rgbd"]
         f.write('\t'.join(headers) + "\n")
