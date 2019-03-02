@@ -94,13 +94,15 @@ def run_cat_naive_bayes(fs, tr_f, tr_l, te_f, te_l,
 # te_inputs - same as tr_f but for testing
 # te_outputs - testing labels
 # verbose - whether to print epoch-wise progress
+# pretrained - pretrained ShrinkingFusionFFModel for 2 modalities, if any.
 def run_ff_model(dv, outdir, model_desc,
                  tr_inputs, tr_outputs, te_inputs, te_outputs,
                  inwidth, hidden_dim, outwidth,  # single hidden layer of specified size, projecting to outwidth classes
                  num_modalities,  # If greater than 1, uses EarlyFusionModel to implement, else simple single hidden layer.
                  batch_size=None, epochs=None,
                  dropout=0, learning_rate=0.001, opt='sgd', activation='relu',
-                 verbose=False):
+                 verbose=False,
+                 pretrained=None, pretrained_freeze=False):
     assert batch_size is not None or epochs is not None
 
     # Prepare the data.
@@ -123,6 +125,17 @@ def run_ff_model(dv, outdir, model_desc,
     elif num_modalities == 2:
         fusion_model = ShrinkingFusionFFModel(dv, len(tr_inputs[0][0]), len(tr_inputs[1][0]),
                                               hidden_dim, dropout, activation).to(dv)
+        # Optionally load pre-trained weights for the L+V model component.
+        if pretrained is not None:
+            if verbose:
+                print("FF: loading pretrained weights")
+            fusion_model.load_state_dict(torch.load(pretrained))
+            # Freeze weights.
+            if pretrained_freeze:
+                if verbose:
+                    print("FF: freezing pretrained weights")
+                for param in fusion_model.parameters():
+                    param.requires_grad = False
         model = PredModel(dv, fusion_model, hidden_dim, outwidth).to(dv)
     else:
         sys.exit("ERROR: unsupported number of modalities for run_ff_model %d" % num_modalities)

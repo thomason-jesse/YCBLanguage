@@ -439,6 +439,8 @@ rgbd_only_dev, train/test on robo
         f1  0.000+/-0.000       (train: 0.000+/-0.000)
         train loss 0.000+/-0.000
         train epochs 1.000+/-0.000
+
+
  RGBD:
   in:   acc 0.689+/-0.076       (train: 0.886+/-0.044)
         f1  0.247+/-0.219       (train: 0.536+/-0.192)
@@ -479,6 +481,35 @@ rgbd_only_dev, train/test on robo
         RGBD p-value 0.131
         RGBD+GloVe+ResNet p-value 0.362
 
+
+ GloVe+ResNet FF:
+  in:   acc 0.849+/-0.022       (train: 0.880+/-0.059)
+        f1  0.791+/-0.029       (train: 0.886+/-0.054)
+        train loss 1.296+/-1.477
+        train epochs 10.200+/-8.588
+        Majority Class p-value 0.000
+        Oracle Majority Class p-value 0.000
+  on:   acc 0.567+/-0.033       (train: 0.974+/-0.008)
+        f1  0.665+/-0.040       (train: 0.962+/-0.012)
+        train loss 0.059+/-0.020
+        train epochs 23.000+/-5.273
+        Majority Class p-value 0.000
+        Oracle Majority Class p-value 0.000
+ GloVe+ResNet FF_lv-Pretrained_trained_models_dev_m2n:
+  in:   acc 0.889+/-0.025       (train: 0.901+/-0.037)
+        f1  0.835+/-0.042       (train: 0.906+/-0.031)
+        train loss 0.674+/-0.548
+        train epochs 11.200+/-7.082
+        Majority Class p-value 0.000
+        Oracle Majority Class p-value 0.000
+        GloVe+ResNet FF p-value 0.002
+  on:   acc 0.584+/-0.035       (train: 0.981+/-0.007)
+        f1  0.680+/-0.040       (train: 0.973+/-0.010)
+        train loss 0.049+/-0.015
+        train epochs 20.500+/-4.410
+        Majority Class p-value 0.000
+        Oracle Majority Class p-value 0.001
+        GloVe+ResNet FF p-value 0.296
 ---
 
 all_test, train/test on mturk
@@ -573,6 +604,8 @@ rgbd_only_test, train/test on robo
         train loss 0.000+/-0.000
         train epochs 1.000+/-0.000
         Majority Class p-value 0.000
+
+
  RGBD:
   in:   acc 0.774+/-0.051       (train: 0.887+/-0.042)
         f1  0.152+/-0.171       (train: 0.522+/-0.205)
@@ -601,7 +634,7 @@ rgbd_only_test, train/test on robo
         Majority Class p-value 0.000
         Oracle Majority Class p-value 0.004
         RGBD p-value 0.191
- RGBD+GloVe+ResNet_lv-Pretrained_trained_models_test_m2n
+ RGBD+GloVe+ResNet_lv-Pretrained_trained_models_test_m2n:
   in:   acc 0.768+/-0.054       (train: 0.865+/-0.078)
         f1  0.235+/-0.178       (train: 0.518+/-0.203)
         train loss 0.602+/-0.546
@@ -619,6 +652,35 @@ rgbd_only_test, train/test on robo
         RGBD p-value 0.121
         RGBD+GloVe+ResNet p-value 0.833
 
+
+ GloVe+ResNet FF:
+  in:   acc 0.817+/-0.035       (train: 0.911+/-0.041)
+        f1  0.546+/-0.058       (train: 0.916+/-0.039)
+        train loss 1.687+/-2.123
+        train epochs 12.700+/-8.556
+        Majority Class p-value 0.000
+        Oracle Majority Class p-value 0.186
+  on:   acc 0.478+/-0.024       (train: 0.967+/-0.029)
+        f1  0.531+/-0.033       (train: 0.950+/-0.046)
+        train loss 0.079+/-0.060
+        train epochs 19.000+/-8.521
+        Majority Class p-value 0.000
+        Oracle Majority Class p-value 0.000
+GloVe+ResNet FF_lv-Pretrained_trained_models_test_m2n:
+  in:   acc 0.868+/-0.017       (train: 0.902+/-0.044)
+        f1  0.624+/-0.057       (train: 0.908+/-0.041)
+        train loss 1.781+/-2.639
+        train epochs 11.100+/-9.038
+        Majority Class p-value 0.000
+        Oracle Majority Class p-value 0.000
+        GloVe+ResNet FF p-value 0.002
+  on:   acc 0.505+/-0.028       (train: 0.924+/-0.034)
+        f1  0.585+/-0.034       (train: 0.879+/-0.059)
+        train loss 0.181+/-0.083
+        train epochs 7.400+/-4.630
+        Majority Class p-value 0.000
+        Oracle Majority Class p-value 0.000
+        GloVe+ResNet FF p-value 0.043
 =====
 
 RGBD / RGBD+ hyperparams considered:
@@ -670,3 +732,8 @@ Feb 18-22:
 - (J/Y) Refine paper draft so it's ready to shop around.
 Feb 23-March 1:
 - Shop paper around + make edits and exp changes based on suggestions.
+March 2 - [Review period start]:
+- Clean up repository and rename scripts as appropriate.
+- Generate single robo data JSON to commit or have available for download.
+- Host images and their resnet embeddings for link in repo.
+- Upload arxiv version of paper [Check this is allowed].

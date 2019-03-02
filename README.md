@@ -1,5 +1,7 @@
 # YCBLanguage
 
+Sensor streams and robot trajectory rosbag files are available on request.
+
 This quickly walks you through: 
 - extracting processed RGBD features from before / after dropping behavior executions;
 - extracting vector representations of RGB, depth, language, and visual information based on RGBD, referring expression, and YCB static image data about objects preprocessed with the above script, GloVe embeddings, and ResNet, respectively; and

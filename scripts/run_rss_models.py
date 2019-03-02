@@ -329,7 +329,8 @@ def main(args, dv):
                 model_desc = "p-%s_m-glove_tr-%s_te-%s" % (p, args.train_objective, args.test_objective)
                 rs[-1][p] = run_ff_model(dv, args.outdir, model_desc,
                                          tr_inputs_l[p], tr_outputs[p], te_inputs_l[p], te_outputs[p],
-                                         tr_inputs_l[p].shape[1], hyperparam[p]["hidden_dim"], len(classes), num_modalities=1,
+                                         tr_inputs_l[p].shape[1], hyperparam[p]["hidden_dim"],
+                                         len(classes), num_modalities=1,
                                          epochs=num_epochs, dropout=hyperparam[p]["dropout"],
                                          learning_rate=hyperparam[p]["lv_learning_rate"], opt=hyperparam[p]["opt"],
                                          activation=hyperparam[p]["activation"],
@@ -343,7 +344,8 @@ def main(args, dv):
                     model_desc = "p-%s_m-glove_tr-%s_te-%s_s-%s" % (p, args.train_objective, args.test_objective, seed)
                     rs[-1][p].append(run_ff_model(dv, args.outdir, model_desc,
                                                   tr_inputs_l[p], tr_outputs[p], te_inputs_l[p], te_outputs[p],
-                                                  tr_inputs_l[p].shape[1], hyperparam[p]["hidden_dim"], len(classes), num_modalities=1,
+                                                  tr_inputs_l[p].shape[1], hyperparam[p]["hidden_dim"],
+                                                  len(classes), num_modalities=1,
                                                   epochs=num_epochs, dropout=hyperparam[p]["dropout"],
                                                   learning_rate=hyperparam[p]["lv_learning_rate"], opt=hyperparam[p]["opt"],
                                                   activation=hyperparam[p]["activation"],
@@ -359,7 +361,8 @@ def main(args, dv):
                 model_desc = "p-%s_m-resnet_tr-%s_te-%s" % (p, args.train_objective, args.test_objective)
                 rs[-1][p] = run_ff_model(dv, args.outdir, model_desc,
                                          tr_inputs_v[p], tr_outputs[p], te_inputs_v[p], te_outputs[p],
-                                         tr_inputs_v[p].shape[1], hyperparam[p]["hidden_dim"], len(classes), num_modalities=1,
+                                         tr_inputs_v[p].shape[1], hyperparam[p]["hidden_dim"],
+                                         len(classes), num_modalities=1,
                                          epochs=num_epochs, dropout=hyperparam[p]["dropout"],
                                          learning_rate=hyperparam[p]["lv_learning_rate"], opt=hyperparam[p]["opt"],
                                          activation=hyperparam[p]["activation"],
@@ -373,62 +376,79 @@ def main(args, dv):
                     model_desc = "p-%s_m-resnet_tr-%s_te-%s_s-%s" % (p, args.train_objective, args.test_objective, seed)
                     rs[-1][p].append(run_ff_model(dv, args.outdir, model_desc,
                                                   tr_inputs_v[p], tr_outputs[p], te_inputs_v[p], te_outputs[p],
-                                                  tr_inputs_v[p].shape[1], hyperparam[p]["hidden_dim"], len(classes), num_modalities=1,
+                                                  tr_inputs_v[p].shape[1], hyperparam[p]["hidden_dim"],
+                                                  len(classes),num_modalities=1,
                                                   epochs=num_epochs, dropout=hyperparam[p]["dropout"],
                                                   learning_rate=hyperparam[p]["lv_learning_rate"], opt=hyperparam[p]["opt"],
                                                   activation=hyperparam[p]["activation"],
                                                   verbose=args.verbose, batch_size=batch_size))
         print("... done")
+
+    # Load all possible pretraining parameters from given dir.
+    lv_pretrained_fns_settings = [None]
+    if args.lv_pretrained_dir is not None:
+        in_fns = []
+        on_fns = []
+        for _, _, fns in os.walk(args.lv_pretrained_dir):
+            for fn in fns:
+                if fn.split('.')[-1] == "fm" and "loss" in fn:
+                    if "p-on" in fn:
+                        on_fns.append(os.path.join(args.lv_pretrained_dir, fn))
+                    elif "p-in" in fn:
+                        in_fns.append(os.path.join(args.lv_pretrained_dir, fn))
+        for idx in range(len(in_fns)):
+            lv_pretrained_fns_settings.append("%s,%s" % (on_fns[idx], in_fns[idx]))
 
     if 'glove+resnet' in models:
         print("Running GloVe+ResNet FF models")
-        bs.append("GloVe+ResNet FF")
-        rs.append({})
-        for p in preps:
-            if random_restarts is None:
-                model_desc = "p-%s_m-glove+resnet_tr-%s_te-%s" % (p, args.train_objective, args.test_objective)
-                rs[-1][p] = run_ff_model(dv, args.outdir, model_desc,
-                                         [tr_inputs_l[p], tr_inputs_v[p]], tr_outputs[p],
-                                         [te_inputs_l[p], te_inputs_v[p]], te_outputs[p],
-                                         None, hyperparam[p]["hidden_dim"], len(classes), num_modalities=2,
-                                         epochs=num_epochs, dropout=hyperparam[p]["dropout"],
-                                         learning_rate=hyperparam[p]["lv_learning_rate"], opt=hyperparam[p]["opt"],
-                                         activation=hyperparam[p]["activation"],
-                                         verbose=args.verbose, batch_size=batch_size)
-            else:
-                rs[-1][p] = []
-                for seed in tqdm(random_restarts, desc="for '%s'" % p):
-                    # print("... with seed " + str(seed) + "...")
-                    np.random.seed(seed)
-                    torch.manual_seed(seed)
-                    model_desc = "p-%s_m-glove+resnet_tr-%s_te-%s_s-%s" % (p, args.train_objective, args.test_objective, seed)
-                    rs[-1][p].append(run_ff_model(dv, args.outdir, model_desc,
-                                                  [tr_inputs_l[p], tr_inputs_v[p]], tr_outputs[p],
-                                                  [te_inputs_l[p], te_inputs_v[p]], te_outputs[p],
-                                                  None, hyperparam[p]["hidden_dim"], len(classes), num_modalities=2,
-                                                  epochs=num_epochs, dropout=hyperparam[p]["dropout"],
-                                                  learning_rate=hyperparam[p]["lv_learning_rate"], opt=hyperparam[p]["opt"],
-                                                  activation=hyperparam[p]["activation"],
-                                                  verbose=args.verbose, batch_size=batch_size))
+        for lv_pretrained_fns in lv_pretrained_fns_settings:
+            bs.append("GloVe+ResNet FF")
+            if lv_pretrained_fns is not None:
+                bs[-1] += "_lv-Pretrained_" + lv_pretrained_fns
+            rs.append({})
+            for p in preps:
+
+                # Optionally load pre-trained weights for the L+V model component.
+                if lv_pretrained_fns is not None:
+                    lv_pretrained_fn = lv_pretrained_fns.split(',')[0] if p == 'on' \
+                        else lv_pretrained_fns.split(',')[1]
+                else:
+                    lv_pretrained_fn = None
+
+                if random_restarts is None:
+                    model_desc = "p-%s_m-glove+resnet_tr-%s_te-%s" % (p, args.train_objective, args.test_objective)
+                    rs[-1][p] = run_ff_model(dv, args.outdir, model_desc,
+                                             [tr_inputs_l[p], tr_inputs_v[p]], tr_outputs[p],
+                                             [te_inputs_l[p], te_inputs_v[p]], te_outputs[p],
+                                             None, hyperparam[p]["hidden_dim"], len(classes), num_modalities=2,
+                                             epochs=num_epochs, dropout=hyperparam[p]["dropout"],
+                                             learning_rate=hyperparam[p]["lv_learning_rate"], opt=hyperparam[p]["opt"],
+                                             activation=hyperparam[p]["activation"],
+                                             verbose=args.verbose, batch_size=batch_size,
+                                             pretrained=lv_pretrained_fn)
+                else:
+                    rs[-1][p] = []
+                    for seed in tqdm(random_restarts, desc="for '%s'" % p):
+                        # print("... with seed " + str(seed) + "...")
+                        np.random.seed(seed)
+                        torch.manual_seed(seed)
+                        model_desc = "p-%s_m-glove+resnet_tr-%s_te-%s_s-%s" % (p, args.train_objective,
+                                                                               args.test_objective, seed)
+                        rs[-1][p].append(run_ff_model(dv, args.outdir, model_desc,
+                                                      [tr_inputs_l[p], tr_inputs_v[p]], tr_outputs[p],
+                                                      [te_inputs_l[p], te_inputs_v[p]], te_outputs[p],
+                                                      None, hyperparam[p]["hidden_dim"], len(classes), num_modalities=2,
+                                                      epochs=num_epochs, dropout=hyperparam[p]["dropout"],
+                                                      learning_rate=hyperparam[p]["lv_learning_rate"],
+                                                      opt=hyperparam[p]["opt"],
+                                                      activation=hyperparam[p]["activation"],
+                                                      verbose=args.verbose, batch_size=batch_size,
+                                                      pretrained=lv_pretrained_fn,
+                                                      pretrained_freeze=True if args.lv_pretrained_freeze == 1
+                                                      else False))
         print("... done")
 
     if 'rgbd+glove+resnet' in models:
-
-        # Load all possible pretraining parameters from give  dir.
-        lv_pretrained_fns_settings = [None]
-        if args.lv_pretrained_dir is not None:
-            in_fns = []
-            on_fns = []
-            for _, _, fns in os.walk(args.lv_pretrained_dir):
-                for fn in fns:
-                    if fn.split('.')[-1] == "fm" and "loss" in fn:
-                        if "p-on" in fn:
-                            on_fns.append(os.path.join(args.lv_pretrained_dir, fn))
-                        elif "p-in" in fn:
-                            in_fns.append(os.path.join(args.lv_pretrained_dir, fn))
-            for idx in range(len(in_fns)):
-                lv_pretrained_fns_settings.append("%s,%s" % (on_fns[idx], in_fns[idx]))
-
         print("Running RGBD+GloVe+ResNet models")
         for lv_pretrained_fns in lv_pretrained_fns_settings:
             bs.append("RGBD+GloVe+ResNet")
