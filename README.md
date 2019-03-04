@@ -1,8 +1,8 @@
 # YCBLanguage
 
-Source for IROS 2019 submission 143
-"Improving Robot Success Detection using Static Object Data"
-Rosario Scalise, Jesse Thomason, Yonatan Bisk, and Siddhartha Srinivasa
+Source for IROS 2019 submission 143:
+
+"Improving Robot Success Detection using Static Object Data." Rosario Scalise, Jesse Thomason, Yonatan Bisk, and Siddhartha Srinivasa
 
 ### Supplementary Material
 
@@ -12,16 +12,20 @@ Sensor streams and robot trajectory rosbag files are available on request. These
 
 ### Success Detection Models
 
-This quickly walks you through: 
+This README walks you through: 
 - extracting processed RGBD features from before / after dropping behavior executions;
-- extracting vector representations of RGB, depth, language, and visual information based on RGBD, referring expression, and YCB static image data about objects preprocessed with the above script, GloVe embeddings, and ResNet, respectively; and
+- extracting vector representations of RGB, depth, language, and visual information based on RGBD, referring expression, and YCB static image data about objects; and
 - training and evaluating end-to-end networks that take in those vector representations to classify "in"/"on" success labels between pairs of objects.
+
+These models are implemented with the `pytorch` library. To download this and other requirements, run:
+
+`pip install -r requirements.txt`
 
 #### Downloading Data.
 
 Static images (with preprocessed ResNet features already extracted) and downsampled RGB-D trial data can be downloaded at:
 
-[Static Images](https://drive.google.com/open?id=1agZgomkPywxQCp91Usx1gqEdfpIMCr0L)
+[Static YCB Object Images](https://drive.google.com/open?id=1agZgomkPywxQCp91Usx1gqEdfpIMCr0L)
 
 Move this `imgs` directory to `data/imgs/`.
 
@@ -70,7 +74,7 @@ If the optional `test` flag is set in these commands, the `test` set will be use
 
 Run the majority class baseline, egocentric, and egocentric+object data models with:
 
-`python train_and_eval_models.py --models mc,rgbd,rgbd+glove+resnet --outdir [robot_pairs_trained_models] --input [path for vectors]/rgbd_only_dev --train_objective robo --test_objective robo --random_restarts 1,2,3,4,5,6,7,8,9,10`
+`python train_and_eval_models.py --models mc,rgbd,rgbd+glove+resnet --round_m_to_n 1 --outdir [robot_pairs_trained_models] --input [path for vectors]/rgbd_only_dev --train_objective robo --test_objective robo --random_restarts 1,2,3,4,5,6,7,8,9,10`
 
 Note that this loads and evaluates on the `dev` fold, and uses `robo` target labels from robot trials.
 
@@ -78,11 +82,11 @@ All results in our submission use 10 random restarts with the given seeds. Omit 
 
 To run the egocentric+(pretrained) object data model, first pretrain the object data layers on All Pairs with target labels from mturk annotations:
 
-`python train_and_eval_models.py --models glove+resnet --outdir [all_pairs_trained_models] --input [path for vectors]/all_dev --train_objective mturk --test_objective mturk --random_restarts 1,2,3,4,5,6,7,8,9,10`
+`python train_and_eval_models.py --models glove+resnet --round_m_to_n 1 --outdir [all_pairs_trained_models] --input [path for vectors]/all_dev --train_objective mturk --test_objective mturk --random_restarts 1,2,3,4,5,6,7,8,9,10`
 
 Then load the pretrained weights for training and evaluating against robo labels:
 
-`python train_and_eval_models.py --models rgbd+glove+resnet --outdir [robot_pairs_trained_models] --input [path for vectors]/rgbd_only_dev --train_objective robo --test_objective robo ----lv_pretrained_dir [all_pairs_trained_models] --random_restarts 1,2,3,4,5,6,7,8,9,10`
+`python train_and_eval_models.py --models rgbd+glove+resnet --round_m_to_n 1 --outdir [robot_pairs_trained_models] --input [path for vectors]/rgbd_only_dev --train_objective robo --test_objective robo ----lv_pretrained_dir [all_pairs_trained_models] --random_restarts 1,2,3,4,5,6,7,8,9,10`
 
 This trains a separate model for each set of weights found in the `[all_pairs_trained_models]` directory.
 
@@ -90,7 +94,7 @@ This trains a separate model for each set of weights found in the `[all_pairs_tr
 
 To generate a summary of pairs for which two trained models disagree, record their predictions during training and evaluation with the optional `predictions_outfile` flag, e.g.,
 
-`python train_and_eval_models.py --models rgbd,rgbd+glove+resnet --outdir [robot_pairs_trained_models] --input [path for vectors]/rgbd_only_dev --train_objective robo --test_objective robo ----lv_pretrained_dir [all_pairs_trained_models] --random_restarts 1,2,3,4,5,6,7,8,9,10 --predictions_outfile [dev predictions json]`
+`python train_and_eval_models.py --models rgbd,rgbd+glove+resnet --round_m_to_n 1 --outdir [robot_pairs_trained_models] --input [path for vectors]/rgbd_only_dev --train_objective robo --test_objective robo ----lv_pretrained_dir [all_pairs_trained_models] --random_restarts 1,2,3,4,5,6,7,8,9,10 --predictions_outfile [dev predictions json]`
 
 Subsequently, use `view_contrastive_pairs.py` to generate the summary:
 
