@@ -272,7 +272,6 @@ def main(args):
                                 rgbd_feats[f][int(ob1)][int(ob2)] = [[], []]  # RGB, D, parralel by trial
                                 rgbd_seen[f][int(ob1)][int(ob2)] = p
 
-                            # TODO: some kind of normalization of both RGB and depth data.
                             if rgbd_seen[f][int(ob1)][int(ob2)] == p:
                                 # Un-normalized distance between final and initial image in RGB and depth space.
                                 t0cm = t0cm/np.sum(t0cm, axis=0, keepdims=True)
@@ -298,15 +297,15 @@ def main(args):
     print("... done")
 
     # Write out extracted features in label-file parallel format.
-    print("Preparing output file format and writing to '" + args.hand_features_outfile + "'...")
-    out_d = {f: {p: {"ob1": all_d["folds"][f][p]["ob1"],
-                     "ob2": all_d["folds"][f][p]["ob2"],
-                     "feats": [feats[f][p][ob1][ob2] if ob1 in feats[f][p] and ob2 in feats[f][p][ob1] else None
-                               for ob1, ob2 in zip(all_d["folds"][f][p]["ob1"], all_d["folds"][f][p]["ob2"])]
-                     } for p in preps} for f in folds}
-    with open(args.hand_features_outfile, 'w') as f:
-        json.dump(out_d, f, indent=2)
-    print("... done")
+    # print("Preparing output file format and writing to '" + args.hand_features_outfile + "'...")
+    # out_d = {f: {p: {"ob1": all_d["folds"][f][p]["ob1"],
+    #                  "ob2": all_d["folds"][f][p]["ob2"],
+    #                  "feats": [feats[f][p][ob1][ob2] if ob1 in feats[f][p] and ob2 in feats[f][p][ob1] else None
+    #                            for ob1, ob2 in zip(all_d["folds"][f][p]["ob1"], all_d["folds"][f][p]["ob2"])]
+    #                  } for p in preps} for f in folds}
+    # with open(args.hand_features_outfile, 'w') as f:
+    #     json.dump(out_d, f, indent=2)
+    # print("... done")
 
     # Write out RGBD features in object pair format.
     print("Preparing RGBD output file and writing to '" + args.rgbd_features_outfile + "'...")
@@ -322,8 +321,8 @@ if __name__ == "__main__":
                         help="input json file with train/dev/test split")
     parser.add_argument('--features_indir', type=str, required=False,
                         help="input dir containing input jsons from rosbag processing")
-    parser.add_argument('--hand_features_outfile', type=str, required=True,
-                        help="output json mapping object pairs to dropping behavior hand-crafted feature vectors")
+    # parser.add_argument('--hand_features_outfile', type=str, required=True,
+    #                     help="output json mapping object pairs to dropping behavior hand-crafted feature vectors")
     parser.add_argument('--rgbd_features_outfile', type=str, required=True,
                         help="output json mapping object pairs to their rgbd features")
     main(parser.parse_args())
