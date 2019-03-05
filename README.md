@@ -6,6 +6,8 @@ Source for IROS 2019 submission 143:
 
 ### Supplementary Material
 
+[Supplementary Material for IROS 143](iros_143_sm.pdf)
+
 ### Rosbags
 
 Sensor streams and robot trajectory rosbag files are available on request. These files total around 100GB.
