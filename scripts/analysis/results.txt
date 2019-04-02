@@ -360,6 +360,15 @@ rgbd_only_test
 
 all_dev, train/test on mturk
 
+ Random:
+  in:   acc 0.494+/-0.065       (train: 0.502+/-0.016)
+        f1  0.204+/-0.056       (train: 0.260+/-0.018)
+        train loss 0.000+/-0.000
+        train epochs 1.000+/-0.000
+  on:   acc 0.495+/-0.026       (train: 0.499+/-0.009)
+        f1  0.338+/-0.032       (train: 0.326+/-0.014)
+        train loss 0.000+/-0.000
+        train epochs 1.000+/-0.000
  Majority Class:
   in:   acc 0.870+/-0.000       (train: 0.821+/-0.000)
         f1  0.000+/-0.000       (train: 0.000+/-0.000)
@@ -430,6 +439,15 @@ all_dev, train/test on mturk
 
 rgbd_only_dev, train/test on robo
 
+ Random:
+  in:   acc 0.491+/-0.059       (train: 0.492+/-0.042)
+        f1  0.370+/-0.083       (train: 0.497+/-0.044)
+        train loss 0.000+/-0.000
+        train epochs 1.000+/-0.000
+  on:   acc 0.502+/-0.055       (train: 0.508+/-0.038)
+        f1  0.563+/-0.045       (train: 0.412+/-0.042)
+        train loss 0.000+/-0.000
+        train epochs 1.000+/-0.000
  Majority Class:
   in:   acc 0.319+/-0.000       (train: 0.518+/-0.000)
         f1  0.484+/-0.000       (train: 0.683+/-0.000)
@@ -514,6 +532,15 @@ rgbd_only_dev, train/test on robo
 
 all_test, train/test on mturk
 
+ Random:
+  in:   acc 0.514+/-0.058       (train: 0.496+/-0.018)
+        f1  0.260+/-0.062       (train: 0.252+/-0.026)
+        train loss 0.000+/-0.000
+        train epochs 1.000+/-0.000
+  on:   acc 0.506+/-0.028       (train: 0.501+/-0.006)
+        f1  0.262+/-0.033       (train: 0.328+/-0.010)
+        train loss 0.000+/-0.000
+        train epochs 1.000+/-0.000
  Majority Class:
   in:   acc 0.842+/-0.000       (train: 0.821+/-0.000)
         f1  0.000+/-0.000       (train: 0.000+/-0.000)
@@ -584,6 +611,15 @@ all_test, train/test on mturk
 
 rgbd_only_test, train/test on robo
 
+ Random:
+  in:   acc 0.520+/-0.049       (train: 0.476+/-0.031)
+        f1  0.309+/-0.075       (train: 0.482+/-0.039)
+        train loss 0.000+/-0.000
+        train epochs 1.000+/-0.000
+  on:   acc 0.507+/-0.072       (train: 0.513+/-0.035)
+        f1  0.580+/-0.067       (train: 0.419+/-0.043)
+        train loss 0.000+/-0.000
+        train epochs 1.000+/-0.000
  Majority Class:
   in:   acc 0.200+/-0.000       (train: 0.518+/-0.000)
         f1  0.333+/-0.000       (train: 0.683+/-0.000)
@@ -666,7 +702,7 @@ rgbd_only_test, train/test on robo
         train epochs 19.000+/-8.521
         Majority Class p-value 0.000
         Oracle Majority Class p-value 0.000
-GloVe+ResNet FF_lv-Pretrained_trained_models_test_m2n:
+ GloVe+ResNet FF_lv-Pretrained_trained_models_test_m2n:
   in:   acc 0.868+/-0.017       (train: 0.902+/-0.044)
         f1  0.624+/-0.057       (train: 0.908+/-0.041)
         train loss 1.781+/-2.639
@@ -681,6 +717,284 @@ GloVe+ResNet FF_lv-Pretrained_trained_models_test_m2n:
         Majority Class p-value 0.000
         Oracle Majority Class p-value 0.000
         GloVe+ResNet FF p-value 0.043
+=====
+
+Ablations
+
+---
+
+all_dev, train/test on mturk
+
+ (Z)GloVe+(Z)ResNet FF:
+  in:   acc 0.870+/-0.000       (train: 0.814+/-0.010)
+        f1  0.000+/-0.000       (train: 0.014+/-0.026)
+        train loss 0.500+/-0.008
+        train epochs 0.000+/-0.000
+  on:   acc 0.733+/-0.000       (train: 0.741+/-0.020)
+        f1  0.000+/-0.000       (train: 0.036+/-0.048)
+        train loss 0.580+/-0.005
+        train epochs 0.000+/-0.000
+ (Z)GloVe+ResNet FF:
+  in:   acc 0.935+/-0.012       (train: 0.927+/-0.048)
+        f1  0.758+/-0.051       (train: 0.753+/-0.220)
+        train loss 0.175+/-0.097
+        train epochs 8.800+/-8.681
+  on:   acc 0.786+/-0.005       (train: 0.825+/-0.040)
+        f1  0.507+/-0.039       (train: 0.505+/-0.201)
+        train loss 0.386+/-0.078
+        train epochs 2.400+/-2.653
+ GloVe+(Z)ResNet FF:
+  in:   acc 0.856+/-0.018       (train: 0.863+/-0.061)
+        f1  0.132+/-0.126       (train: 0.376+/-0.345)
+        train loss 0.285+/-0.115
+        train epochs 4.800+/-9.569
+  on:   acc 0.757+/-0.008       (train: 0.774+/-0.045)
+        f1  0.340+/-0.101       (train: 0.268+/-0.204)
+        train loss 0.453+/-0.068
+        train epochs 1.000+/-2.683
+
+----
+
+rgbd_only_dev, train/test on robo
+
+ RGBD+(Z)GloVe+(Z)ResNet:
+  in:   acc 0.653+/-0.033       (train: 0.870+/-0.061)
+        f1  0.175+/-0.210       (train: 0.528+/-0.185)
+        train loss 0.272+/-0.145
+        train epochs 10.000+/-7.810
+  on:   acc 0.564+/-0.107       (train: 0.926+/-0.031)
+        f1  0.508+/-0.257       (train: 0.608+/-0.203)
+        train loss 0.168+/-0.100
+        train epochs 16.800+/-8.623
+ (Z)RGBD+(Z)GloVe+ResNet:
+  in:   acc 0.711+/-0.081       (train: 0.890+/-0.071)
+        f1  0.204+/-0.307       (train: 0.577+/-0.280)
+        train loss 0.270+/-0.172
+        train epochs 8.100+/-8.300
+  on:   acc 0.503+/-0.062       (train: 0.941+/-0.051)
+        f1  0.450+/-0.142       (train: 0.681+/-0.284)
+        train loss 0.154+/-0.122
+        train epochs 16.800+/-9.673
+ (Z)RGBD+GloVe+(Z)ResNet:
+  in:   acc 0.702+/-0.025       (train: 0.859+/-0.052)
+        f1  0.251+/-0.231       (train: 0.407+/-0.236)
+        train loss 0.349+/-0.131
+        train epochs 2.700+/-3.002
+  on:   acc 0.557+/-0.098       (train: 0.956+/-0.026)
+        f1  0.509+/-0.236       (train: 0.760+/-0.194)
+        train loss 0.111+/-0.051
+        train epochs 13.900+/-8.642
+ (Z)RGBD+GloVe+ResNet:
+  in:   acc 0.755+/-0.084       (train: 0.900+/-0.046)
+        f1  0.479+/-0.306       (train: 0.618+/-0.192)
+        train loss 0.431+/-0.347
+        train epochs 11.200+/-7.730
+  on:   acc 0.579+/-0.051       (train: 0.929+/-0.020)
+        f1  0.593+/-0.090       (train: 0.619+/-0.143)
+        train loss 0.680+/-0.638
+        train epochs 15.400+/-7.116
+ RGBD+(Z)GloVe+ResNet:
+  in:   acc 0.700+/-0.100       (train: 0.914+/-0.051)
+        f1  0.409+/-0.262       (train: 0.706+/-0.169)
+        train loss 0.196+/-0.150
+        train epochs 8.600+/-8.369
+  on:   acc 0.581+/-0.106       (train: 0.951+/-0.028)
+        f1  0.618+/-0.129       (train: 0.741+/-0.180)
+        train loss 0.105+/-0.048
+        train epochs 14.300+/-8.198
+ RGBD+GloVe+(Z)ResNet:
+  in:   acc 0.668+/-0.081       (train: 0.924+/-0.044)
+        f1  0.441+/-0.210       (train: 0.709+/-0.218)
+        train loss 0.189+/-0.114
+        train epochs 6.900+/-4.847
+  on:   acc 0.602+/-0.081       (train: 0.972+/-0.012)
+        f1  0.618+/-0.159       (train: 0.855+/-0.086)
+        train loss 0.072+/-0.025
+        train epochs 16.200+/-6.194
+
+ (Z)RGBD+GloVe+(Z)ResNet_lv-Pretrained_trained_models_dev_ablations/noegeo+novis:
+  in:   acc 0.715+/-0.037       (train: 0.874+/-0.059)
+        f1  0.342+/-0.292       (train: 0.475+/-0.281)
+        train loss 0.311+/-0.147
+        train epochs 5.300+/-6.943
+  on:   acc 0.571+/-0.088       (train: 0.971+/-0.010)
+        f1  0.584+/-0.155       (train: 0.857+/-0.054)
+        train loss 0.085+/-0.021
+        train epochs 19.800+/-6.112
+ (Z)RGBD+(Z)GloVe+ResNet_lv-Pretrained_trained_models_dev_ablations/noegeo+nolang:
+  in:   acc 0.723+/-0.073       (train: 0.914+/-0.059)
+        f1  0.350+/-0.287       (train: 0.665+/-0.275)
+        train loss 0.213+/-0.150
+        train epochs 9.100+/-6.074
+  on:   acc 0.529+/-0.054       (train: 0.940+/-0.052)
+        f1  0.530+/-0.079       (train: 0.694+/-0.276)
+        train loss 0.157+/-0.121
+        train epochs 17.800+/-9.998
+ (Z)RGBD+GloVe+ResNet_lv-Pretrained_trained_models_dev_ablations/noego:
+  in:   acc 0.781+/-0.080       (train: 0.912+/-0.047)
+        f1  0.571+/-0.291       (train: 0.674+/-0.174)
+        train loss 0.455+/-0.483
+        train epochs 11.500+/-8.041
+  on:   acc 0.595+/-0.039       (train: 0.920+/-0.021)
+        f1  0.625+/-0.086       (train: 0.583+/-0.122)
+        train loss 1.379+/-1.171
+        train epochs 20.100+/-5.856
+ RGBD+(Z)GloVe+ResNet_lv-Pretrained_trained_models_dev_ablations/nolang:
+  in:   acc 0.723+/-0.083       (train: 0.869+/-0.060)
+        f1  0.396+/-0.295       (train: 0.514+/-0.229)
+        train loss 0.342+/-0.206
+        train epochs 3.700+/-5.551
+  on:   acc 0.591+/-0.125       (train: 0.944+/-0.023)
+        f1  0.597+/-0.162       (train: 0.691+/-0.212)
+        train loss 0.172+/-0.132
+        train epochs 11.100+/-8.455
+ RGBD+GloVe+(Z)ResNet_lv-Pretrained_trained_models_dev_ablations/novis:
+  in:   acc 0.679+/-0.079       (train: 0.882+/-0.087)
+        f1  0.306+/-0.279       (train: 0.609+/-0.246)
+        train loss 0.286+/-0.203
+        train epochs 5.300+/-5.235
+  on:   acc 0.616+/-0.076       (train: 0.972+/-0.009)
+        f1  0.661+/-0.112       (train: 0.865+/-0.046)
+        train loss 0.067+/-0.015
+        train epochs 16.900+/-7.148
+
+---
+
+all_test, train/test on mturk
+
+ (Z)GloVe+(Z)ResNet FF:
+  in:   acc 0.842+/-0.000       (train: 0.814+/-0.010)
+        f1  0.000+/-0.000       (train: 0.014+/-0.026)
+        train loss 0.500+/-0.008
+        train epochs 0.000+/-0.000
+  on:   acc 0.825+/-0.000       (train: 0.741+/-0.020)
+        f1  0.000+/-0.000       (train: 0.036+/-0.048)
+        train loss 0.580+/-0.005
+        train epochs 0.000+/-0.000
+ (Z)GloVe+ResNet FF:
+  in:   acc 0.884+/-0.015       (train: 0.942+/-0.033)
+        f1  0.545+/-0.046       (train: 0.813+/-0.162)
+        train loss 0.151+/-0.078
+        train epochs 8.800+/-7.718
+  on:   acc 0.822+/-0.009       (train: 0.800+/-0.031)
+        f1  0.353+/-0.045       (train: 0.413+/-0.148)
+        train loss 0.433+/-0.058
+        train epochs 0.400+/-0.490
+ GloVe+(Z)ResNet FF:
+  in:   acc 0.862+/-0.007       (train: 0.946+/-0.043)
+        f1  0.459+/-0.039       (train: 0.827+/-0.189)
+        train loss 0.135+/-0.082
+        train epochs 12.300+/-6.768
+  on:   acc 0.830+/-0.009       (train: 0.759+/-0.021)
+        f1  0.280+/-0.085       (train: 0.180+/-0.043)
+        train loss 0.484+/-0.005
+        train epochs 0.000+/-0.000
+
+----
+
+rgbd_only_test, train/test on robo
+
+ RGBD+(Z)GloVe+(Z)ResNet:
+  in:   acc 0.757+/-0.061       (train: 0.849+/-0.055)
+        f1  0.153+/-0.174       (train: 0.436+/-0.203)
+        train loss 0.345+/-0.153
+        train epochs 6.000+/-6.229
+  on:   acc 0.537+/-0.121       (train: 0.917+/-0.053)
+        f1  0.515+/-0.245       (train: 0.549+/-0.275)
+        train loss 0.181+/-0.125
+        train epochs 13.500+/-9.362
+ (Z)RGBD+(Z)GloVe+ResNet:
+  in:   acc 0.802+/-0.042       (train: 0.903+/-0.064)
+        f1  0.232+/-0.181       (train: 0.635+/-0.245)
+        train loss 0.229+/-0.133
+        train epochs 9.300+/-7.403
+  on:   acc 0.463+/-0.086       (train: 0.950+/-0.019)
+        f1  0.443+/-0.182       (train: 0.752+/-0.093)
+        train loss 0.125+/-0.038
+        train epochs 15.900+/-7.516
+ (Z)RGBD+GloVe+(Z)ResNet:
+  in:   acc 0.790+/-0.017       (train: 0.872+/-0.062)
+        f1  0.111+/-0.139       (train: 0.500+/-0.234)
+        train loss 0.320+/-0.145
+        train epochs 5.800+/-8.060
+  on:   acc 0.447+/-0.045       (train: 0.959+/-0.022)
+        f1  0.385+/-0.103       (train: 0.785+/-0.145)
+        train loss 0.105+/-0.041
+        train epochs 13.900+/-8.549
+ (Z)RGBD+GloVe+ResNet:
+  in:   acc 0.800+/-0.029       (train: 0.883+/-0.050)
+        f1  0.206+/-0.188       (train: 0.530+/-0.210)
+        train loss 0.392+/-0.250
+        train epochs 6.700+/-5.832
+  on:   acc 0.545+/-0.041       (train: 0.919+/-0.031)
+        f1  0.600+/-0.077       (train: 0.574+/-0.161)
+        train loss 0.956+/-0.816
+        train epochs 18.700+/-7.511
+ RGBD+(Z)GloVe+ResNet:
+  in:   acc 0.748+/-0.114       (train: 0.907+/-0.044)
+        f1  0.165+/-0.173       (train: 0.642+/-0.198)
+        train loss 0.183+/-0.089
+        train epochs 6.500+/-6.233
+  on:   acc 0.572+/-0.102       (train: 0.963+/-0.017)
+        f1  0.638+/-0.141       (train: 0.817+/-0.092)
+        train loss 0.092+/-0.031
+        train epochs 17.500+/-8.322
+ RGBD+GloVe+(Z)ResNet:
+  in:   acc 0.745+/-0.059       (train: 0.900+/-0.077)
+        f1  0.282+/-0.224       (train: 0.665+/-0.246)
+        train loss 0.227+/-0.177
+        train epochs 8.500+/-9.157
+  on:   acc 0.538+/-0.102       (train: 0.967+/-0.027)
+        f1  0.558+/-0.158       (train: 0.809+/-0.225)
+        train loss 0.100+/-0.110
+        train epochs 14.800+/-6.779
+
+ (Z)RGBD+(Z)GloVe+ResNet_lv-Pretrained_trained_models_test_ablations/noego+nolang:
+  in:   acc 0.805+/-0.037       (train: 0.865+/-0.082)
+        f1  0.183+/-0.250       (train: 0.486+/-0.318)
+        train loss 0.328+/-0.186
+        train epochs 6.900+/-7.368
+  on:   acc 0.477+/-0.058       (train: 0.957+/-0.016)
+        f1  0.460+/-0.132       (train: 0.786+/-0.097)
+        train loss 0.114+/-0.039
+        train epochs 16.900+/-6.580
+ (Z)RGBD+GloVe+(Z)ResNet_lv-Pretrained_trained_models_test_ablations/noego+novis:
+  in:   acc 0.793+/-0.015       (train: 0.844+/-0.060)
+        f1  0.059+/-0.135       (train: 0.353+/-0.275)
+        train loss 0.373+/-0.142
+        train epochs 3.100+/-4.392
+  on:   acc 0.480+/-0.072       (train: 0.974+/-0.010)
+        f1  0.446+/-0.133       (train: 0.874+/-0.051)
+        train loss 0.077+/-0.019
+        train epochs 19.300+/-7.198
+ (Z)RGBD+GloVe+ResNet_lv-Pretrained_trained_models_test_ablations/noego:
+  in:   acc 0.788+/-0.038       (train: 0.865+/-0.051)
+        f1  0.265+/-0.157       (train: 0.445+/-0.209)
+        train loss 0.451+/-0.166
+        train epochs 3.400+/-4.587
+  on:   acc 0.548+/-0.042       (train: 0.934+/-0.020)
+        f1  0.606+/-0.085       (train: 0.651+/-0.120)
+        train loss 0.525+/-0.503
+        train epochs 17.600+/-7.723
+ RGBD+(Z)GloVe+ResNet_lv-Pretrained_trained_models_test_ablations/nolang:
+  in:   acc 0.795+/-0.054       (train: 0.853+/-0.095)
+        f1  0.204+/-0.245       (train: 0.533+/-0.253)
+        train loss 0.357+/-0.225
+        train epochs 4.300+/-5.021
+  on:   acc 0.558+/-0.096       (train: 0.947+/-0.054)
+        f1  0.595+/-0.148       (train: 0.758+/-0.234)
+        train loss 0.126+/-0.131
+        train epochs 13.500+/-7.658
+ RGBD+GloVe+(Z)ResNet_lv-Pretrained_trained_models_test_ablations/novis:
+  in:   acc 0.795+/-0.024       (train: 0.892+/-0.055)
+        f1  0.166+/-0.212       (train: 0.591+/-0.219)
+        train loss 0.301+/-0.182
+        train epochs 4.800+/-4.854
+  on:   acc 0.567+/-0.070       (train: 0.966+/-0.018)
+        f1  0.590+/-0.118       (train: 0.841+/-0.078)
+        train loss 0.082+/-0.035
+        train epochs 15.000+/-8.258
+
 =====
 
 RGBD / RGBD+ hyperparams considered:
@@ -724,16 +1038,3 @@ on
     RGBD    .348
     RGBD+   .369
 ---
-
-Feb 18-22:
-- (R) First pass at RW.
-- (R) Finish initial draft of paper.
-- (R) Figure content for analysis section.
-- (J/Y) Refine paper draft so it's ready to shop around.
-Feb 23-March 1:
-- Shop paper around + make edits and exp changes based on suggestions.
-March 2 - [Review period start]:
-- Clean up repository and rename scripts as appropriate.
-- Generate single robo data JSON to commit or have available for download.
-- Host images and their resnet embeddings for link in repo.
-- Upload arxiv version of paper [Check this is allowed].

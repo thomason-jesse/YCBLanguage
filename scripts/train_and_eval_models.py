@@ -119,6 +119,22 @@ def main(args, dv):
                                             dtype=torch.float).to(dv) if d["test"]["rgb"] is not None else None
             te_inputs_d[p] = torch.tensor(keep_all_but(d["test"]["d"], d["test"][test_label], [-1]),
                                           dtype=torch.float).to(dv) if d["test"]["d"] is not None else None
+
+            if args.zero_lang:
+                print("... zeroing out language modality for %s" % p)
+                tr_inputs_l[p] = torch.zeros(tr_inputs_l[p].shape)
+                te_inputs_l[p] = torch.zeros(te_inputs_l[p].shape)
+            if args.zero_vis:
+                print("... zeroing out vision modality for %s" % p)
+                tr_inputs_v[p] = torch.zeros(tr_inputs_v[p].shape)
+                te_inputs_v[p] = torch.zeros(te_inputs_v[p].shape)
+            if args.zero_ego:
+                print("... zeroing out egocentric modalities for %s" % p)
+                tr_inputs_rgb[p] = torch.zeros(tr_inputs_rgb[p].shape)
+                tr_inputs_d[p] = torch.zeros(tr_inputs_d[p].shape)
+                te_inputs_rgb[p] = torch.zeros(te_inputs_rgb[p].shape)
+                te_inputs_d[p] = torch.zeros(te_inputs_d[p].shape)
+
         print("... %s done; num train out %d, num test out %d" % (p, tr_outputs[p].shape[0], te_outputs[p].shape[0]))
 
         train_classes = set([int(v.item()) for v in tr_outputs[p]])
@@ -138,6 +154,33 @@ def main(args, dv):
     if random_restarts is not None:
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
+
+    # Random baseline.
+    if 'random' in models:
+        print("Running random baseline...")
+        bs.append("Random")
+        rs.append({})
+        for p in preps:
+            if random_restarts is None:
+                seeds = [None]
+            else:
+                seeds = random_restarts
+                rs[-1][p] = []
+            for seed in tqdm(seeds, desc="for '%s'" % p):
+                if seed is not None:
+                    # print("... %s with seed %d ..." % (p, seed))
+                    np.random.seed(seed)
+                    torch.manual_seed(seed)
+
+                results = run_random([int(c[0]) for c in tr_outputs[p].detach().data.cpu().numpy().tolist()],
+                                     [int(c[0]) for c in te_outputs[p].detach().data.cpu().numpy().tolist()],
+                                     len(classes))
+
+                if random_restarts is None:
+                    rs[-1][p] = results
+                else:
+                    rs[-1][p].append(results)
+        print("... done")
 
     # Majority class baseline.
     if 'mc' in models:
@@ -710,7 +753,7 @@ if __name__ == "__main__":
     parser.add_argument('--input', type=str, required=True,
                         help="torch ready train/test input root to load as json")
     parser.add_argument('--models', type=str, required=True,
-                        help="models to run (mc, glove, resnet, rgbd)")
+                        help="models to run (random, mc, glove, resnet, rgbd)")
     parser.add_argument('--train_objective', type=str, required=True,
                         help="either 'mturk', 'robo', or 'human'")
     parser.add_argument('--test_objective', type=str, required=True,
@@ -733,5 +776,11 @@ if __name__ == "__main__":
                         help="comma-separated list of random seeds to use; presents avg + stddev data instead of cms")
     parser.add_argument('--predictions_outfile', type=str, required=False,
                         help="file to dump prediction JSON across models")
+    parser.add_argument('--zero_lang', type=int, required=False,
+                        help="if true, zero out object language inputs to get ablated results")
+    parser.add_argument('--zero_vis', type=int, required=False,
+                        help="if true, zero out object vision inputs to get ablated results")
+    parser.add_argument('--zero_ego', type=int, required=False,
+                        help="if true, zero out egocentric inputs to get ablated results")
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     main(parser.parse_args(), device)

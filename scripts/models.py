@@ -12,6 +12,23 @@ from functools import reduce
 from utils import *
 
 
+# Answer a class uniformly at from among those available.
+# tr_l - training labels
+# te_l - testing labels
+def run_random(tr_l, te_l, num_classes):
+
+    # Test: for every instance, guess randomly.
+    cm = np.zeros(shape=(num_classes, num_classes))
+    trcm = np.zeros(shape=(num_classes, num_classes))
+    for labels, conmat in [[te_l, cm], [tr_l, trcm]]:
+        for l in labels:
+            c = np.random.randint(0, num_classes)
+            conmat[l][c] += 1
+
+    # Return accuracy and cm.
+    return get_acc(cm), cm, get_acc(trcm), trcm, 0, 1, {}
+
+
 # Count the majority class label in the train set and use it as a classification decision on every instance
 # in the test set.
 # tr_l - training labels
