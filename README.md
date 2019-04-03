@@ -97,7 +97,7 @@ To run the egocentric+(pretrained) object data model, first pretrain the object 
 
 ```
 python train_and_eval_models.py --models glove+resnet --round_m_to_n 1 --outdir [all_pairs_trained_models] --input [path for vectors]/all_dev --train_objective mturk --test_objective mturk --random_restarts 1,2,3,4,5,6,7,8,9,10
-python train_and_eval_models.py --models rgbd+glove+resnet --round_m_to_n 1 --outdir [robot_pairs_trained_models] --input [path for vectors]/rgbd_only_dev --train_objective robo --test_objective robo ----lv_pretrained_dir [all_pairs_trained_models] --random_restarts 1,2,3,4,5,6,7,8,9,10
+python train_and_eval_models.py --models rgbd+glove+resnet --round_m_to_n 1 --outdir [robot_pairs_trained_models] --input [path for vectors]/rgbd_only_dev --train_objective robo --test_objective robo --lv_pretrained_dir [all_pairs_trained_models] --random_restarts 1,2,3,4,5,6,7,8,9,10
 ```
 
 This trains a separate model for each set of weights found in the `[all_pairs_trained_models]` directory.
@@ -107,7 +107,7 @@ This trains a separate model for each set of weights found in the `[all_pairs_tr
 To generate a summary of pairs for which two trained models disagree, record their predictions during training and evaluation with the optional `predictions_outfile` flag, and subsequently use `view_contrastive_pairs.py` to generate the summary
 
 ```
-python train_and_eval_models.py --models rgbd,rgbd+glove+resnet --round_m_to_n 1 --outdir [robot_pairs_trained_models] --input [path for vectors]/rgbd_only_dev --train_objective robo --test_objective robo ----lv_pretrained_dir [all_pairs_trained_models] --random_restarts 1,2,3,4,5,6,7,8,9,10 --predictions_outfile [dev predictions json]
+python train_and_eval_models.py --models rgbd,rgbd+glove+resnet --round_m_to_n 1 --outdir [robot_pairs_trained_models] --input [path for vectors]/rgbd_only_dev --train_objective robo --test_objective robo --lv_pretrained_dir [all_pairs_trained_models] --random_restarts 1,2,3,4,5,6,7,8,9,10 --predictions_outfile [dev predictions json]
 cd analysis
 python view_contrastive_pairs.py --predictions_infile [dev predictions json] --metadata_infile ../../data/all_data.json --torch_infile [path for vectors]/rgbd_only_dev --use_highest_acc --splits_infile ../../data/3class_object_split.json
 ```
