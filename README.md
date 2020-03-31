@@ -1,12 +1,10 @@
 # YCBLanguage
 
-Source for IROS 2019 submission 143:
-
-"Improving Robot Success Detection using Static Object Data." Rosario Scalise, Jesse Thomason, Yonatan Bisk, and Siddhartha Srinivasa
+Source for "Improving Robot Success Detection using Static Object Data." Rosario Scalise, Jesse Thomason, Yonatan Bisk, and Siddhartha Srinivasa. IROS 2019.
 
 ### Supplementary Material
 
-[Supplementary Material for IROS 143](iros_143_sm.pdf)
+[Supplementary Material](iros_143_sm.pdf)
 
 ### Rosbags
 
